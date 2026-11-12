@@ -18,10 +18,14 @@ SPICE formatında netlist dosyalarını okuyarak DC ve AC (fazör) analizlerini 
   * Karmaşık lineer sistem çözümü: $A(\omega) \cdot x(\omega) = z(\omega)$.
   * Kutupsal (Polar: $|V|\angle\theta^\circ$), Kartezyen ($a+jb$) ve RMS gösterimi.
   * Aktif güç ($P$), Reaktif güç ($Q$) ve AC Tellegen güç dengesi ($\sum S = 0$).
-* **Bağımlı Kaynaklar (Geliştiriliyor):**
-  * VCVS (`E`), VCCS (`G`), CCVS (`H`), CCCS (`F`).
-* **Resimden Netlist (Geliştirilecek):**
-  * Devre şeması fotoğrafından netlist üretimi ve ngspice doğrulaması.
+* **Bağımlı Kaynaklar (Tüm 4 Tür):**
+  * **VCVS (`E`):** Gerilim Kontrollü Gerilim Kaynağı ($V = \mu \cdot V_{in}$) — İdeal ve kazançlı Op-Amp modelleri.
+  * **VCCS (`G`):** Gerilim Kontrollü Akım Kaynağı ($I = g_m \cdot V_{in}$) — BJT ve MOSFET küçük işaret modelleri.
+  * **CCVS (`H`):** Akım Kontrollü Gerilim Kaynağı ($V = r \cdot I_{sens}$).
+  * **CCCS (`F`):** Akım Kontrollü Akım Kaynağı ($I = \beta \cdot I_{sens}$) — BJT akım kazancı modelleri.
+* **Sıradaki Geliştirmeler:**
+  * Zaman domeninde geçici (transient) analiz ve dalga şekli çizimleri (`matplotlib`).
+  * Resimden netlist (Claude Vision API / YOLO) ve `ngspice` doğrulaması.
 
 ---
 
@@ -37,16 +41,16 @@ pip install numpy
 
 ## 💻 Kullanım
 
-### 1. DC Analizi Çalıştırma
+### 1. DC Analizi
 ```bash
 python3 devre_cozucu/main.py devre_cozucu/ornekler/gerilim_bolucu.cir
 ```
-MNA matrisini de görmek için `--matris` parametresini ekleyebilirsiniz:
+Op-Amp Evirmeyen Yükselteç devresi örneği:
 ```bash
-python3 devre_cozucu/main.py devre_cozucu/ornekler/kopru.cir --matris
+python3 devre_cozucu/main.py devre_cozucu/ornekler/opamp_evirmeyen_kuvvetlendirici.cir
 ```
 
-### 2. AC Fazör Analizi Çalıştırma
+### 2. AC Fazör Analizi
 ```bash
 # RC Alçak Geçiren Filtre analizi:
 python3 devre_cozucu/main.py devre_cozucu/ornekler/rc_alcak_geciren.cir
@@ -59,7 +63,7 @@ python3 devre_cozucu/main.py devre_cozucu/ornekler/rlc_rezonans.cir --matris
 
 ## 🧪 Testleri Çalıştırma
 
-Tüm birim testleri çalıştırmak için:
+Tüm 23 birim testi çalıştırmak için:
 ```bash
 python3 -m unittest discover -s devre_cozucu -v
 ```
@@ -73,13 +77,14 @@ python3 -m unittest discover -s devre_cozucu -v
 │   ├── netlist.py          # Netlist ayrıştırıcı (parser)
 │   ├── mna.py              # DC ve AC MNA çözücü motoru
 │   ├── main.py             # Komut satırı arayüzü ve raporlama
-│   ├── test_mna.py         # Otomatik birim testler (19 test)
+│   ├── test_mna.py         # Otomatik birim testler (23 test)
 │   └── ornekler/           # Örnek SPICE devre dosyaları (.cir)
 │       ├── gerilim_bolucu.cir
 │       ├── kopru.cir
 │       ├── super_dugum.cir
 │       ├── rc_alcak_geciren.cir
-│       └── rlc_rezonans.cir
+│       ├── rlc_rezonans.cir
+│       └── opamp_evirmeyen_kuvvetlendirici.cir
 ├── memory.md               # Proje yol haritası ve ilerleme notları
 └── README.md
 ```

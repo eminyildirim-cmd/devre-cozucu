@@ -4,54 +4,27 @@ MNA — Modified Nodal Analysis (Değiştirilmiş Düğüm Analizi)
 FİKİR
 -----
 Klasik düğüm analizinde her düğüme KCL yazarız: "çıkan akımların toplamı = 0".
-Bilinmeyenler düğüm voltajlarıdır. Ama gerilim kaynağının akımı voltajla ifade
-edilemez (I = ? ; kaynak her akımı verebilir). Klasik çözüm "süper düğüm"dür.
+Gerilim kaynaklarının akımı bilinmeyen olduğu için, MNA bu akımları EKSTRA
+BİLİNMEYEN yapar ve gerilim tanımlayıcı her eleman için ek denklem ekler.
 
-MNA daha sistematik bir yol izler: her gerilim kaynağının akımını da EKSTRA
-BİLİNMEYEN yapar ve her kaynak için bir ekstra denklem ekler: V(+) - V(-) = E.
-
-Sonuçta n düğüm (toprak hariç) ve m gerilim kaynağı için (n+m)×(n+m) sistem:
-
+Sistem denklemi:
         ┌       ┐ ┌   ┐   ┌   ┐
         │ G   B │ │ v │   │ i │      v : düğüm voltajları      (n tane)
-        │       │ │   │ = │   │      j : V-kaynak akımları     (m tane)
+        │       │ │   │ = │   │      j : gerilim kaynağı akımları (m tane)
         │ C   D │ │ j │   │ e │      i : düğümlere basılan akım kaynakları
-        └       ┘ └   ┘   └   ┘      e : gerilim kaynaklarının değerleri
+        └       ┘ └   ┘   └   ┘      e : kaynak gerilimleri
 
-    G : iletkenlik/admittans matrisi
-    B : hangi kaynak hangi düğüme bağlı (+1 / -1)
-    C = Bᵀ (bağımsız kaynaklar için)
-    D = 0  (bağımsız kaynaklar için; bağımlı kaynaklarda dolacak)
-
-"STAMP" (DAMGA) YÖNTEMİ
------------------------
-Her eleman matrise kendi küçük katkısını "damgalar", birbirinden bağımsız olarak.
-Devreyi bilmeye gerek yok; elemanları tek tek dolaşıp topla. SPICE'ın kalbi budur.
-
-AC (FAZÖR) ANALİZİ
-------------------
-AC kararlı durumda gerilim ve akımlar karmaşık fazörler (phasor) ile ifade edilir:
-    v(t) = Vm · cos(ωt + φ)  ->  V = Vm · e^(jφ)
-    ω = 2πf  (açısal frekans, rad/s)
-
-Pasif iki uçlu elemanların (R, C, L) ortak damgası admittans (Y = 1/Z) ile yazılır:
-    • Direnç (R)   : Y = 1 / R
-    • Kapasitör (C): Z = 1/(jωC)  ->  Y = jωC
-    • Bobin (L)    : Z = jωL      ->  Y = 1/(jωL) = -j / (ωL)
-
-Her pasif eleman (a → b) admittans matrisine şu damgayı basar:
-    A[a, a] += Y
-    A[b, b] += Y
-    A[a, b] -= Y
-    A[b, a] -= Y
-
-İŞARET KURALI (SPICE ile aynı)
-------------------------------
-Gerilim kaynağı akımı j: kaynağın İÇİNDEN + uçtan - uca akan akım.
-Yani güç veren (normal çalışan) bir kaynak için j NEGATİF çıkar.
-Güç: S = (1/2) · V · I* (tepe fazörleri ile emilen karmaşık güç).
-     P = Re(S) -> Aktif güç (W)
-     Q = Im(S) -> Reaktif güç (VAR)
+DESTEKLENEN ELEMANLAR VE DAMGALARI:
+-----------------------------------
+1. Direnç (R)   : Admittans Y = 1/R
+2. Kapasitör (C): AC admittans Y = jωC (DC'de açık devre)
+3. Bobin (L)    : AC admittans Y = 1/(jωL) (DC'de kısa devre: 0V gerilim kaynağı)
+4. Bağımsız V/I : V ek bilinmeyen j ekler; I sağ tarafa (z) basar.
+5. Bağımlı Kaynaklar:
+   • VCVS (E): V(out) = μ · V(in)       -> Gerilim kontrollü gerilim kaynağı
+   • VCCS (G): I(out) = gm · V(in)      -> Gerilim kontrollü akım kaynağı
+   • CCVS (H): V(out) = r · I(Vsens)    -> Akım kontrollü gerilim kaynağı
+   • CCCS (F): I(out) = β · I(Vsens)    -> Akım kontrollü akım kaynağı
 """
 
 from dataclasses import dataclass, field
@@ -66,11 +39,10 @@ from netlist import Eleman
 @dataclass
 class Cozum:
     """DC analizi çözüm sonuçları."""
-    dugum_voltajlari: dict[str, float]      # {"1": 5.0, "2": 2.5, "0": 0.0}
-    eleman_akimlari: dict[str, float]       # + uçtan - uca, elemanın içinden
-    eleman_gerilimleri: dict[str, float]    # V(+) - V(-)
-    eleman_gucleri: dict[str, float]        # emilen güç (pasif işaret kuralı); negatif = güç veriyor
-    # Eğitim amaçlı: kurulan sistem
+    dugum_voltajlari: dict[str, float]
+    eleman_akimlari: dict[str, float]
+    eleman_gerilimleri: dict[str, float]
+    eleman_gucleri: dict[str, float]
     A: np.ndarray = field(repr=False, default=None)
     z: np.ndarray = field(repr=False, default=None)
     bilinmeyenler: list[str] = field(default_factory=list)
@@ -79,25 +51,22 @@ class Cozum:
 @dataclass
 class ACCozum:
     """AC fazör analizi çözüm sonuçları."""
-    frekans: float                          # Frekans f (Hz)
-    omega: float                            # Açısal frekans ω = 2πf (rad/s)
-    dugum_voltajlari: dict[str, complex]    # Karmaşık fazör gerilimleri: V(+)
-    eleman_akimlari: dict[str, complex]     # + uçtan - uca karmaşık fazör akımları
-    eleman_gerilimleri: dict[str, complex]  # V(+) - V(-) fazör gerilimleri
-    eleman_gucleri: dict[str, complex]      # S = (1/2) · V · I* (karmaşık güç, VA)
-    # Eğitim amaçlı: kurulan sistem
+    frekans: float
+    omega: float
+    dugum_voltajlari: dict[str, complex]
+    eleman_akimlari: dict[str, complex]
+    eleman_gerilimleri: dict[str, complex]
+    eleman_gucleri: dict[str, complex]
     A: np.ndarray = field(repr=False, default=None)
     z: np.ndarray = field(repr=False, default=None)
     bilinmeyenler: list[str] = field(default_factory=list)
 
     @property
     def aktif_gucler(self) -> dict[str, float]:
-        """P = Re(S) [Watt] — dirençlerde harcanan ortalama aktif güç."""
         return {k: v.real for k, v in self.eleman_gucleri.items()}
 
     @property
     def reaktif_gucler(self) -> dict[str, float]:
-        """Q = Im(S) [VAR] — C (negatif) ve L'de (pozitif) depolanan reaktif güç."""
         return {k: v.imag for k, v in self.eleman_gucleri.items()}
 
 
@@ -106,7 +75,6 @@ class DevreHatasi(Exception):
 
 
 def polar(z: complex) -> tuple[float, float]:
-    """Karmaşık fazörü (genlik, derece_cinsinden_faz) olarak döner."""
     genlik, rad = cmath.polar(z)
     derece = math.degrees(rad)
     return genlik, derece
@@ -117,23 +85,21 @@ def polar(z: complex) -> tuple[float, float]:
 # ==============================================================================
 
 def coz(elemanlar: list[Eleman]) -> Cozum:
-    """DC MNA analizi yapar.
-
-    R, V, I elemanlarını ve DC kararlı durumda C (açık devre), L (kısa devre) çözer.
-    """
+    """DC MNA analizi yapar (R, V, I, C, L, E, G, H, F)."""
+    # 1) Düğümleri belirle (0 hariç)
     dugumler: list[str] = []
     for e in elemanlar:
-        for d in (e.dugum_p, e.dugum_n):
-            if d != "0" and d not in dugumler:
+        for d in (e.dugum_p, e.dugum_n, e.kontrol_p, e.kontrol_n):
+            if d and d != "0" and d not in dugumler:
                 dugumler.append(d)
     indeks = {d: i for i, d in enumerate(dugumler)}
 
-    v_kaynaklari = [e for e in elemanlar if e.tur == "V"]
-    # DC'de bobin (L) ideal kısa devredir (0 V gerilim kaynağı gibi davranır)
-    bobinler = [e for e in elemanlar if e.tur == "L"]
-    v_benzeri = v_kaynaklari + bobinler
+    # 2) Ekstra akım değişkeni gerektiren elemanlar: V, L (DC'de kısa devre), E (VCVS), H (CCVS)
+    v_benzeri = [e for e in elemanlar if e.tur in ("V", "L", "E", "H")]
+    v_indeks = {e.isim.upper(): i for i, e in enumerate(v_benzeri)}
 
-    n, m = len(dugumler), len(v_benzeri)
+    n = len(dugumler)
+    m = len(v_benzeri)
     N = n + m
 
     A = np.zeros((N, N), dtype=float)
@@ -150,7 +116,8 @@ def coz(elemanlar: list[Eleman]) -> Cozum:
         if r is not None:
             z[r] += deger
 
-    k = 0  # v_benzeri sayacı
+    # 3) Eleman damgaları
+    k = 0
     for e in elemanlar:
         a, b = e.dugum_p, e.dugum_n
 
@@ -162,7 +129,7 @@ def coz(elemanlar: list[Eleman]) -> Cozum:
             ekle(b, a, -g)
 
         elif e.tur == "C":
-            # DC'de kapasitör açık devre; iletkenlik g = 0, matrise katkı yapmaz
+            # DC kararlı durumda açık devre
             pass
 
         elif e.tur == "I":
@@ -170,7 +137,6 @@ def coz(elemanlar: list[Eleman]) -> Cozum:
             ekle_z(b, +e.deger)
 
         elif e.tur in ("V", "L"):
-            # V için gerilim = e.deger, L için gerilim = 0 (kısa devre)
             voltaj = e.deger if e.tur == "V" else 0.0
             col = n + k
             ekle(a, col, +1.0)
@@ -179,6 +145,49 @@ def coz(elemanlar: list[Eleman]) -> Cozum:
             ekle(col, b, -1.0)
             ekle_z(col, voltaj)
             k += 1
+
+        elif e.tur == "E":  # VCVS: V(a) - V(b) = mu * [V(ca) - V(cb)]
+            col = n + k
+            ca, cb = e.kontrol_p, e.kontrol_n
+            mu = e.deger
+            ekle(a, col, +1.0)
+            ekle(b, col, -1.0)
+            ekle(col, a, +1.0)
+            ekle(col, b, -1.0)
+            ekle(col, ca, -mu)
+            ekle(col, cb, +mu)
+            k += 1
+
+        elif e.tur == "G":  # VCCS: I(a->b) = gm * [V(ca) - V(cb)]
+            ca, cb = e.kontrol_p, e.kontrol_n
+            gm = e.deger
+            ekle(a, ca, +gm)
+            ekle(a, cb, -gm)
+            ekle(b, ca, -gm)
+            ekle(b, cb, +gm)
+
+        elif e.tur == "H":  # CCVS: V(a) - V(b) = r * I(Vsens)
+            col = n + k
+            v_ref = e.kontrol_kaynak.upper()
+            if v_ref not in v_indeks:
+                raise DevreHatasi(f"CCVS '{e.isim}': Kontrol kaynağı '{e.kontrol_kaynak}' bulunamadı.")
+            col_v = n + v_indeks[v_ref]
+            r = e.deger
+            ekle(a, col, +1.0)
+            ekle(b, col, -1.0)
+            ekle(col, a, +1.0)
+            ekle(col, b, -1.0)
+            ekle(col, col_v, -r)
+            k += 1
+
+        elif e.tur == "F":  # CCCS: I(a->b) = beta * I(Vsens)
+            v_ref = e.kontrol_kaynak.upper()
+            if v_ref not in v_indeks:
+                raise DevreHatasi(f"CCCS '{e.isim}': Kontrol kaynağı '{e.kontrol_kaynak}' bulunamadı.")
+            col_v = n + v_indeks[v_ref]
+            beta = e.deger
+            ekle(a, col_v, +beta)
+            ekle(b, col_v, -beta)
 
     bilinmeyenler = [f"V({d})" for d in dugumler] + [f"I({e.isim})" for e in v_benzeri]
 
@@ -202,12 +211,20 @@ def coz(elemanlar: list[Eleman]) -> Cozum:
         if e.tur == "R":
             i = vab / e.deger
         elif e.tur == "C":
-            i = 0.0  # DC kararlı durumda kapasitör akımı sıfırdır
+            i = 0.0
         elif e.tur == "I":
             i = e.deger
-        else:  # V veya L
+        elif e.tur in ("V", "L", "E", "H"):
             i = float(x[n + k])
             k += 1
+        elif e.tur == "G":
+            v_ctrl = V[e.kontrol_p] - V[e.kontrol_n]
+            i = e.deger * v_ctrl
+        elif e.tur == "F":
+            col_v = n + v_indeks[e.kontrol_kaynak.upper()]
+            i_ctrl = float(x[col_v])
+            i = e.deger * i_ctrl
+
         gerilim[e.isim] = vab
         akim[e.isim] = i
         guc[e.isim] = vab * i
@@ -220,16 +237,7 @@ def coz(elemanlar: list[Eleman]) -> Cozum:
 # ==============================================================================
 
 def coz_ac(elemanlar: list[Eleman], frekans: float | None = None) -> ACCozum:
-    """AC frekans domeninde (fazör) MNA analizi yapar.
-
-    Parametreler:
-        elemanlar : Netlist elemanları (R, C, L, V, I)
-        frekans   : Devre çalışma frekansı (Hz). Belirtilmezse netlist'teki
-                    .ac komutundan veya varsayılan 1000 Hz (1 kHz) alınır.
-
-    Dönen değer:
-        ACCozum : Karmaşık fazör gerilimleri, akımları ve güçleri.
-    """
+    """AC frekans domeninde (fazör) MNA analizi yapar (R, C, L, V, I, E, G, H, F)."""
     if frekans is None:
         frekans = getattr(elemanlar, "frekans", None) or 1000.0
 
@@ -240,13 +248,16 @@ def coz_ac(elemanlar: list[Eleman], frekans: float | None = None) -> ACCozum:
 
     dugumler: list[str] = []
     for e in elemanlar:
-        for d in (e.dugum_p, e.dugum_n):
-            if d != "0" and d not in dugumler:
+        for d in (e.dugum_p, e.dugum_n, e.kontrol_p, e.kontrol_n):
+            if d and d != "0" and d not in dugumler:
                 dugumler.append(d)
     indeks = {d: i for i, d in enumerate(dugumler)}
 
-    v_kaynaklari = [e for e in elemanlar if e.tur == "V"]
-    n, m = len(dugumler), len(v_kaynaklari)
+    v_benzeri = [e for e in elemanlar if e.tur in ("V", "E", "H")]
+    v_indeks = {e.isim.upper(): i for i, e in enumerate(v_benzeri)}
+
+    n = len(dugumler)
+    m = len(v_benzeri)
     N = n + m
 
     A = np.zeros((N, N), dtype=np.complex128)
@@ -263,20 +274,16 @@ def coz_ac(elemanlar: list[Eleman], frekans: float | None = None) -> ACCozum:
         if r is not None:
             z[r] += deger
 
-    # 1) Pasif Elemanların ve Kaynakların Damgalanması
     k = 0
     for e in elemanlar:
         a, b = e.dugum_p, e.dugum_n
 
         if e.tur in ("R", "C", "L"):
-            # Admittans (Y = 1/Z) hesabı
             if e.tur == "R":
                 Y = 1.0 / e.deger
             elif e.tur == "C":
-                # Zc = 1 / (jωC)  =>  Yc = jωC
                 Y = 1j * omega * e.deger
             elif e.tur == "L":
-                # Zl = jωL  =>  Yl = 1 / (jωL) = -j / (ωL)
                 Y = -1j / (omega * e.deger)
 
             ekle(a, a, +Y)
@@ -285,20 +292,14 @@ def coz_ac(elemanlar: list[Eleman], frekans: float | None = None) -> ACCozum:
             ekle(b, a, -Y)
 
         elif e.tur == "I":
-            # Fazör akımı: I = I_tepe · e^(j·faz)
             genlik = e.ac_genlik if e.ac_genlik != 0.0 else e.deger
-            faz_rad = math.radians(e.ac_faz)
-            i_fazor = cmath.rect(genlik, faz_rad)
-            # a'dan çeker (-), b'ye basar (+)
+            i_fazor = cmath.rect(genlik, math.radians(e.ac_faz))
             ekle_z(a, -i_fazor)
             ekle_z(b, +i_fazor)
 
         elif e.tur == "V":
-            # Fazör gerilimi: V = V_tepe · e^(j·faz)
             genlik = e.ac_genlik if e.ac_genlik != 0.0 else e.deger
-            faz_rad = math.radians(e.ac_faz)
-            v_fazor = cmath.rect(genlik, faz_rad)
-
+            v_fazor = cmath.rect(genlik, math.radians(e.ac_faz))
             col = n + k
             ekle(a, col, +1.0)
             ekle(b, col, -1.0)
@@ -307,9 +308,51 @@ def coz_ac(elemanlar: list[Eleman], frekans: float | None = None) -> ACCozum:
             ekle_z(col, v_fazor)
             k += 1
 
-    bilinmeyenler = [f"V({d})" for d in dugumler] + [f"I({e.isim})" for e in v_kaynaklari]
+        elif e.tur == "E":  # VCVS
+            col = n + k
+            ca, cb = e.kontrol_p, e.kontrol_n
+            mu = e.deger
+            ekle(a, col, +1.0)
+            ekle(b, col, -1.0)
+            ekle(col, a, +1.0)
+            ekle(col, b, -1.0)
+            ekle(col, ca, -mu)
+            ekle(col, cb, +mu)
+            k += 1
 
-    # 2) Karmaşık Lineer Sistemi Çöz: A · x = z
+        elif e.tur == "G":  # VCCS
+            ca, cb = e.kontrol_p, e.kontrol_n
+            gm = e.deger
+            ekle(a, ca, +gm)
+            ekle(a, cb, -gm)
+            ekle(b, ca, -gm)
+            ekle(b, cb, +gm)
+
+        elif e.tur == "H":  # CCVS
+            col = n + k
+            v_ref = e.kontrol_kaynak.upper()
+            if v_ref not in v_indeks:
+                raise DevreHatasi(f"CCVS '{e.isim}': Kontrol kaynağı '{e.kontrol_kaynak}' bulunamadı.")
+            col_v = n + v_indeks[v_ref]
+            r = e.deger
+            ekle(a, col, +1.0)
+            ekle(b, col, -1.0)
+            ekle(col, a, +1.0)
+            ekle(col, b, -1.0)
+            ekle(col, col_v, -r)
+            k += 1
+
+        elif e.tur == "F":  # CCCS
+            v_ref = e.kontrol_kaynak.upper()
+            if v_ref not in v_indeks:
+                raise DevreHatasi(f"CCCS '{e.isim}': Kontrol kaynağı '{e.kontrol_kaynak}' bulunamadı.")
+            col_v = n + v_indeks[v_ref]
+            beta = e.deger
+            ekle(a, col_v, +beta)
+            ekle(b, col_v, -beta)
+
+    bilinmeyenler = [f"V({d})" for d in dugumler] + [f"I({e.isim})" for e in v_benzeri]
+
     try:
         x = np.linalg.solve(A, z)
     except np.linalg.LinAlgError:
@@ -320,11 +363,9 @@ def coz_ac(elemanlar: list[Eleman], frekans: float | None = None) -> ACCozum:
             "  • Paralel ideal gerilim kaynakları veya ideal LC paralel rezonansı"
         )
 
-    # 3) Fazör Düğüm Gerilimleri
     V = {"0": 0.0 + 0.0j}
     V.update({d: complex(x[indeks[d]]) for d in dugumler})
 
-    # 4) Fazör Eleman Akımları, Gerilimleri ve Güçleri
     akim, gerilim, guc = {}, {}, {}
     k = 0
     for e in elemanlar:
@@ -338,14 +379,19 @@ def coz_ac(elemanlar: list[Eleman], frekans: float | None = None) -> ACCozum:
         elif e.tur == "I":
             genlik = e.ac_genlik if e.ac_genlik != 0.0 else e.deger
             i = cmath.rect(genlik, math.radians(e.ac_faz))
-        else:  # V
+        elif e.tur in ("V", "E", "H"):
             i = complex(x[n + k])
             k += 1
+        elif e.tur == "G":
+            v_ctrl = V[e.kontrol_p] - V[e.kontrol_n]
+            i = e.deger * v_ctrl
+        elif e.tur == "F":
+            col_v = n + v_indeks[e.kontrol_kaynak.upper()]
+            i_ctrl = complex(x[col_v])
+            i = e.deger * i_ctrl
 
         gerilim[e.isim] = vab
         akim[e.isim] = i
-        # Tepe fazörleri ile karmaşık güç: S = 0.5 · V · I*
-        # (Eğer RMS olsaydı doğrudan V · I* olurdu)
         guc[e.isim] = 0.5 * vab * np.conj(i)
 
     return ACCozum(frekans, omega, V, akim, gerilim, guc, A, z, bilinmeyenler)

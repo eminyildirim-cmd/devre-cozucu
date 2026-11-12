@@ -1,0 +1,10 @@
+* Evirmeyen İşlemsel Kuvvetlendirici (Non-inverting Op-Amp)
+* İdeal Op-Amp, yüksek açık çevrim kazançlı VCVS (E) ile modellenmiştir:
+* Eopamp out 0 in+ in- A_OL  (A_OL = 100k)
+* Kapalı çevrim kazancı: Av = 1 + (Rf / R1) = 1 + (9k / 1k) = 10
+* Giriş: 1 V -> Çıkış: 10 V beklenir.
+
+Vin 1 0 1
+Eopamp 3 0 1 2 100k
+Rf 3 2 9k
+R1 2 0 1k
