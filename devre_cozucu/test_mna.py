@@ -8,6 +8,8 @@ import numpy as np
 from laplace import coz_laplace
 from mna import DevreHatasi, coz, coz_ac, polar
 from netlist import deger_oku, netlist_oku
+from ngspice_dogrula import dogrula, ngspice_betigi_olustur, ngspice_cikti_oku
+from resimden_netlist import _netlist_blogunu_ayikla, ornek_sema_olustur, resimden_cozume
 from transient import ascii_ciz, coz_tran, svg_kaydet
 
 
@@ -249,6 +251,75 @@ class Hatalar(unittest.TestCase):
     def test_gecersiz_frekans(self):
         with self.assertRaises(ValueError):
             cozumle_ac("V1 1 0 AC 10\nR1 1 0 1k", frekans=-50)
+
+
+class ResimdenNetlistTest(unittest.TestCase):
+    def test_gerilim_bolucu_semasindan_bfs_cozum(self):
+        test_png = "/tmp/test_sema_gb.png"
+        kutular = ornek_sema_olustur(test_png, "gerilim_bolucu")
+        try:
+            metin, nl = resimden_cozume(test_png, kutular, motor="yerel")
+            self.assertIn("V1", metin)
+            self.assertIn("R1", metin)
+            self.assertIn("R2", metin)
+            c = coz(nl)
+            self.assertAlmostEqual(c.dugum_voltajlari["2"], 20.0 / 3.0, places=5)
+        finally:
+            if os.path.exists(test_png):
+                os.remove(test_png)
+
+    def test_rc_filtre_semasindan_ac_cozum(self):
+        test_png = "/tmp/test_sema_rc.png"
+        kutular = ornek_sema_olustur(test_png, "rc_filtre")
+        try:
+            _, nl = resimden_cozume(test_png, kutular, motor="yerel")
+            fc = 1.0 / (2 * math.pi * 1000 * 1e-6)
+            c = coz_ac(nl, frekans=fc)
+            genlik, faz = polar(c.dugum_voltajlari["2"])
+            self.assertAlmostEqual(genlik, 10.0 / math.sqrt(2), places=3)
+            self.assertAlmostEqual(faz, -45.0, places=2)
+        finally:
+            if os.path.exists(test_png):
+                os.remove(test_png)
+
+    def test_vision_yanit_ayiklama(self):
+        ornek_yanit = "İşte devrenin netlist karşılığı:\n```spice\n* Örnek\nV1 1 0 12\nR1 1 0 4k\n```\nBaşarılar!"
+        ayiklanan = _netlist_blogunu_ayikla(ornek_yanit)
+        nl = netlist_oku(ayiklanan)
+        self.assertEqual(len(nl), 2)
+        c = coz(nl)
+        self.assertAlmostEqual(c.eleman_akimlari["R1"], 3e-3)
+
+
+class NgspiceDogrulamaTest(unittest.TestCase):
+    def test_kcl_kvl_ic_dogrulama(self):
+        nl = netlist_oku("V1 1 0 10\nR1 1 2 2\nV2 2 3 4\nR2 2 0 4\nR3 3 0 8\nI1 0 3 1")
+        rapor = dogrula(nl)
+        self.assertTrue(rapor.basarili)
+        self.assertLess(rapor.kcl_hatasi, 1e-12)
+        self.assertLess(rapor.kvl_hatasi, 1e-12)
+
+    def test_ngspice_betik_ve_cikti_karsilastirma(self):
+        nl = netlist_oku("V1 1 0 10\nR1 1 2 1k\nR2 2 0 2k")
+        betik = ngspice_betigi_olustur(nl)
+        self.assertIn(".op", betik)
+        self.assertIn("print v(1)", betik)
+        self.assertIn("print v(2)", betik)
+
+        sahte_ngspice_ciktisi = """
+        Circuit: * MNA Devre Cozucu
+        Doing analysis at TEMP = 27.000000 and TNOM = 27.000000
+        v(1) = 1.000000e+01
+        v(2) = 6.666667e+00
+        """
+        okunan = ngspice_cikti_oku(sahte_ngspice_ciktisi)
+        self.assertAlmostEqual(okunan["1"], 10.0)
+        self.assertAlmostEqual(okunan["2"], 6.666667)
+
+        rapor = dogrula(nl, ngspice_referans_cikti=sahte_ngspice_ciktisi, tolerans=1e-5)
+        self.assertTrue(rapor.basarili)
+        self.assertTrue(rapor.ngspice_kullanildi)
+        self.assertLess(rapor.ngspice_maks_fark, 1e-5)
 
 
 if __name__ == "__main__":

@@ -2,24 +2,29 @@
 Devre Çözücü — MNA (Modified Nodal Analysis)
 
 Kullanım:
-    # DC analizi:
-    python3 main.py ornekler/gerilim_bolucu.cir
+    # 1. DC analizi ve doğrulama:
+    python3 main.py ornekler/gerilim_bolucu.cir --dogrula
     python3 main.py ornekler/kopru.cir --matris
 
-    # AC (Fazör) analizi:
+    # 2. AC (Fazör) analizi:
     python3 main.py ornekler/rc_alcak_geciren.cir --ac 1k
     python3 main.py ornekler/rlc_rezonans.cir --ac 5032.9 --matris
 
-    # Geçici (Transient) analizi:
+    # 3. Geçici (Transient) analizi:
     python3 main.py ornekler/rc_basamak.cir --tran 10u 5m --ciz 2
     python3 main.py ornekler/rlc_basamak.cir --tran 1u 2m --ciz 2 3 --svg rlc.svg
 
-    # Laplace (s-Domeni) Transfer Fonksiyonu H(s):
+    # 4. Laplace (s-Domeni) Transfer Fonksiyonu H(s):
     python3 main.py ornekler/rc_alcak_geciren.cir --laplace 2
     python3 main.py ornekler/rlc_rezonans.cir --laplace 3
+
+    # 5. Resimden Netlist (Görüntü İşleme / Vision API):
+    python3 main.py --ornek-sema gerilim_bolucu --dogrula
+    python3 main.py --resim sema_fotografi.jpg
 """
 
 import argparse
+import os
 import sys
 
 import numpy as np
@@ -27,6 +32,8 @@ import numpy as np
 from laplace import TransferFonksiyonu, coz_laplace
 from mna import ACCozum, Cozum, DevreHatasi, coz, coz_ac, polar
 from netlist import deger_oku, netlist_oku
+from ngspice_dogrula import dogrula
+from resimden_netlist import ornek_sema_olustur, resimden_cozume
 from transient import ascii_ciz, coz_tran, svg_kaydet
 
 
@@ -198,8 +205,14 @@ def rapor_laplace(tf: TransferFonksiyonu, cikis_dugumu: str):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Devre çözücü (DC, AC Fazör, Geçici ve Laplace MNA)")
-    ap.add_argument("dosya", help="netlist dosyası (.cir)")
+    ap = argparse.ArgumentParser(description="Devre çözücü (DC, AC Fazör, Geçici, Laplace ve Resimden Netlist)")
+    ap.add_argument("dosya", nargs="?", default=None, help="netlist dosyası (.cir)")
+    ap.add_argument("--resim", metavar="GORUNTU", default=None,
+                    help="Devre şeması görüntüsünden (Vision API ile) netlist çıkar ve çöz")
+    ap.add_argument("--ornek-sema", choices=["gerilim_bolucu", "rc_filtre"], default=None,
+                    help="Örnek devre şeması görüntüsü (PNG) çiz, piksel izleme (BFS) ile netlist'e çevir ve çöz")
+    ap.add_argument("--dogrula", action="store_true",
+                    help="Çözümü ngspice ve bağımsız KCL/KVL denetçisi ile doğrula")
     ap.add_argument("--ac", nargs="?", const="1k", default=None,
                     help="AC fazör analizi yap (opsiyonel frekans, örn: --ac 1k)")
     ap.add_argument("--tran", nargs=2, metavar=("TSTEP", "TSTOP"), default=None,
@@ -214,8 +227,29 @@ def main():
     args = ap.parse_args()
 
     try:
-        with open(args.dosya, encoding="utf-8") as f:
-            elemanlar = netlist_oku(f.read())
+        if args.ornek_sema is not None:
+            ornek_klasor = os.path.join(os.path.dirname(__file__), "ornekler")
+            os.makedirs(ornek_klasor, exist_ok=True)
+            png_yolu = os.path.join(ornek_klasor, f"sema_{args.ornek_sema}.png")
+            kutular = ornek_sema_olustur(png_yolu, args.ornek_sema)
+            netlist_metin, elemanlar = resimden_cozume(png_yolu, kutular, motor="yerel")
+            kaynak_etiket = f"{png_yolu} [Görüntüden BFS Tel İzleme]"
+            print(f"── Şema Görüntüsünden Çıkarılan Netlist ({png_yolu}) ──")
+            print(netlist_metin)
+            print()
+        elif args.resim is not None:
+            netlist_metin, elemanlar = resimden_cozume(args.resim)
+            kaynak_etiket = f"{args.resim} [Vision API]"
+            print(f"── Görüntüden Çıkarılan Netlist ({args.resim}) ──")
+            print(netlist_metin)
+            print()
+        elif args.dosya is not None:
+            with open(args.dosya, encoding="utf-8") as f:
+                elemanlar = netlist_oku(f.read())
+            kaynak_etiket = args.dosya
+        else:
+            ap.error("Lütfen bir netlist dosyası (.cir), --resim veya --ornek-sema belirtin.")
+            return
 
         # Mod tespiti
         if args.laplace is not None:
@@ -227,13 +261,13 @@ def main():
                 tstop = deger_oku(args.tran[1])
             else:
                 tstep, tstop = elemanlar.tran
-        elif args.ac is not None or elemanlar.frekans is not None or any(e.ac_genlik > 0 for e in elemanlar):
+        elif args.ac is not None or elemanlar.frekans is not None or any(e.ac_genlik > 0 or e.tur in ("C", "L") for e in elemanlar):
             mod = "AC"
             frekans = deger_oku(args.ac) if args.ac is not None else (elemanlar.frekans or 1000.0)
         else:
             mod = "DC"
 
-        print(f"Devre: {args.dosya}  ({len(elemanlar)} eleman, Mod: {mod})")
+        print(f"Devre: {kaynak_etiket}  ({len(elemanlar)} eleman, Mod: {mod})")
         for e in elemanlar:
             print(f"  {e}")
 
@@ -249,8 +283,12 @@ def main():
         else:
             c_dc = coz(elemanlar)
             rapor_dc(elemanlar, c_dc, args.matris)
+            if args.dogrula:
+                dr = dogrula(elemanlar, c_dc)
+                print(f"\n── Doğrulama Raporu (Aşama 4) ─────────────────────")
+                print(f"  {dr.mesaj}")
 
-    except (ValueError, DevreHatasi, OSError) as hata:
+    except (ValueError, DevreHatasi, OSError, RuntimeError) as hata:
         print(f"Hata: {hata}", file=sys.stderr)
         sys.exit(1)
 

@@ -4,7 +4,7 @@
 
 ## Proje Amacı
 Devre Analizi dersi ve Circuits & Systems uzmanlaşması kapsamında:
-**Devre fotoğrafı → netlist / graf → MNA çözücü → düğüm voltajları, akımlar, güç dengesi, transfer fonksiyonu.**
+**Devre fotoğrafı → netlist / graf → MNA çözücü → düğüm voltajları, akımlar, güç dengesi, transfer fonksiyonu ve doğrulama.**
 
 ---
 
@@ -14,46 +14,36 @@ Devre Analizi dersi ve Circuits & Systems uzmanlaşması kapsamında:
 * `R`, `V`, `I` elemanları için damga (stamp) yöntemi.
 * Süper düğüm (bağımsız gerilim kaynakları) desteği.
 * Güç dengesi (Tellegen teoremi $\sum P = 0$) kontrolü.
-* 13 birim test.
 
 ---
 
 ### [x] Aşama 2: AC (Fazör), C/L, Bağımlı Kaynaklar, Geçici Analiz ve Laplace (Tamamlandı)
 * [x] **2.1 AC (Fazör) MNA Çözücü:**
-  * `C` (Kapasitör) ve `L` (Bobin) admittans damgaları ($Y_C = j\omega C$, $Y_L = \frac{1}{j\omega L}$).
-  * AC gerilim ve akım kaynakları (genlik + faz açısı: `AC <genlik> <faz>`).
-  * Netlist frekans komutu (`.ac <frekans>`).
-  * Karmaşık lineer sistem çözümü: $A(\omega) \cdot x(\omega) = z(\omega)$.
-  * Kutupsal (Polar: $|V|\angle\theta^\circ$) ve Kartezyen ($a+jb$) gösterim, RMS değerleri.
-  * Karmaşık güç hesabı: $S = P + jQ$ ve Tellegen AC güç dengesi ($\sum S = 0$).
+  * `C` ve `L` admittans damgaları ($Y_C = j\omega C$, $Y_L = \frac{1}{j\omega L}$), karmaşık lineer sistem çözümü, polar/kartezyen/RMS çıktılar ve AC Tellegen güç dengesi ($\sum S = 0$).
 * [x] **2.2 Bağımlı Kaynaklar:**
-  * VCVS (`E`): Gerilim kontrollü gerilim kaynağı ($V = \mu \cdot V_{in}$).
-  * VCCS (`G`): Gerilim kontrollü akım kaynağı ($I = g_m \cdot V_{in}$).
-  * CCVS (`H`): Akım kontrollü gerilim kaynağı ($V = r \cdot I_{sens}$).
-  * CCCS (`F`): Akım kontrollü akım kaynağı ($I = \beta \cdot I_{sens}$).
-  * İdeal ve kazançlı Op-Amp modelleri ($A_v = 10$).
+  * VCVS (`E`), VCCS (`G`), CCVS (`H`), CCCS (`F`) damgaları ve Op-Amp modelleri.
 * [x] **2.3 Geçici (Transient) Analiz:**
-  * Sayısal integrasyon (Yamuk Kuralı - Trapezoidal Companion Model).
-  * Sabit zaman adımı ile ultra hızlı simülasyon.
-  * Konsolda doğrudan **ASCII dalga şekli çizimi**.
-  * Harici kütüphane gerektirmeyen vektörel **SVG grafik kaydetme**.
+  * Sayısal integrasyon (Yamuk Kuralı - Trapezoidal Companion Model), konsolda ASCII grafik ve vektörel SVG grafik kaydetme.
 * [x] **2.4 Laplace / Sembolik Transfer Fonksiyonu $H(s)$:**
-  * s-domeni sembolik MNA matrisi $A(s) \cdot X(s) = Z(s)$.
-  * Rasyonel polinom aritmetiği ve Gauss eliminasyonu ile $H(s) = N(s)/D(s)$ türetimi.
-  * Otomatik kutup-sıfır analizi (Poles & Zeros).
-  * Kararlılık denetimi (sol yarı s-düzlemi kontrolü).
-  * DC kazancı ($H(0)$ ve dB cinsinden karşılığı).
-  * 2. dereceden sistem parametreleri: doğal frekans ($\omega_0$), sönüm oranı ($\zeta$), kalite faktörü ($Q$).
-* **Toplam Birim Test Sayısı: 29/29 Başarılı.**
+  * s-domeni rasyonel polinom aritmetiği ile $H(s) = N(s)/D(s)$ türetimi, kutup-sıfır (Poles & Zeros), kararlılık analizi, DC kazancı ve 2. derece parametreler ($\omega_0, Q, \zeta$).
 
 ---
 
-### [ ] Aşama 3: Resimden Netlist (Sıradaki Aşama)
-* Claude Vision API ile el çizimi / ders kitabı devre şeması fotoğrafından netlist prototipi.
-* İsteğe bağlı YOLO ile devre elemanları ve bağlantı düğümleri tespiti (CGHD veri seti).
-* Görüntüden elde edilen netlist'in otomatik olarak MNA çözücüye beslenmesi.
+### [x] Aşama 3: Resimden Netlist — Vision API + BFS Piksel Tel İzleme (Tamamlandı)
+* `devre_cozucu/resimden_netlist.py`:
+  * **Yaklaşım 1 (Vision API):** Anthropic Claude Vision (`ANTHROPIC_API_KEY`) ve Google Gemini Vision (`GEMINI_API_KEY`) ile devre fotoğrafından doğrudan SPICE netlist çıkarma (`--resim sema.jpg`).
+  * **Yaklaşım 2 (YOLO Kutuları + BFS Piksel Tel Takibi):**
+    1. Görüntüyü eşikleme (thresholding) ile ikili (siyah-beyaz) matrise dönüştürme.
+    2. Eleman sınır kutularını (bounding box) maskeleyip yalnızca bağlantı kablolarını bırakma.
+    3. 8-komşuluklu Genişlik Öncelikli Arama (BFS / Connected Components) ile her tel ağını tek bir elektriksel düğüm olarak etiketleme.
+    4. Toprak (`GND`) sembolünü `0` düğümüne eşleme ve her elemanın `+`/`-` terminallerini düğümlerle birleştirerek otomatik SPICE netlist üretme.
+  * **Sentetik Şema Üretici:** `Pillow` ile gerçek PNG devre şemaları (`sema_gerilim_bolucu.png`, `sema_rc_filtre.png`) çizip uçtan uca görüntüden MNA çözümüne (`--ornek-sema`) doğrulama.
 
 ---
 
-### [ ] Aşama 4: ngspice ile Doğrulama
-* Çözücünün ürettiği sonuçların `ngspice` simülatörü ile otomatik çapraz doğrulanması.
+### [x] Aşama 4: ngspice ve Fiziksel KCL/KVL Doğrulaması (Tamamlandı)
+* `devre_cozucu/ngspice_dogrula.py`:
+  * Otomatik `ngspice` toplu iş (batch `.op` / `.control`) betiği üretimi ve çıktı ayrıştırıcısı.
+  * Sistemde `ngspice` kuruluysa doğrudan alt süreç olarak çalıştırıp düğüm voltajlarını çapraz karşılaştırma; kurulu değilse bağımsız Kirchhoff Akımlar Yasası ($\sum I = 0$) ve Kirchhoff Gerilimler Yasası / Ohm bünye denklemleriyle sıfır toleranslı doğrulama (`--dogrula`).
+
+* **Toplam Birim Test Sayısı: 34/34 Başarılı.**

@@ -1,121 +1,85 @@
-# Devre Çözücü (Circuit Solver) — MNA
+# Devre Çözücü (Circuit Solver) — Görüntüden Graf ve MNA Simülatörü
 
-Devre Analizi ve *Circuits & Systems* çalışmaları için geliştirilmiş, **Değiştirilmiş Düğüm Analizi (Modified Nodal Analysis - MNA)** tabanlı devre simülatörü.
+Devre Analizi ve *Circuits & Systems* çalışmaları için geliştirilmiş, **Değiştirilmiş Düğüm Analizi (Modified Nodal Analysis - MNA)** tabanlı uçtan uca devre simülatörü.
 
-SPICE formatında netlist dosyalarını okuyarak DC, AC (fazör), Geçici (transient) ve Laplace sembolik transfer fonksiyonu analizlerini adım adım damga (stamp) yöntemiyle çözer.
+Devre şeması görüntülerinden (PNG/JPG) veya SPICE `.cir` dosyalarından netlist okuyarak **DC**, **AC (fazör)**, **Geçici (transient)** ve **Laplace sembolik transfer fonksiyonu $H(s)$** analizlerini adım adım damga (stamp) yöntemiyle çözer ve doğrular.
 
 ---
 
 ## 🚀 Özellikler
 
-* **DC Analizi:**
-  * Direnç (`R`), Bağımsız Gerilim Kaynakları (`V`), Bağımsız Akım Kaynakları (`I`).
-  * Süper düğüm desteği (kaynak akımlarını ekstra bilinmeyen olarak matrise ekler).
-  * Tellegen güç dengesi doğrulaması ($\sum P = 0$).
-* **AC (Fazör) Analizi:**
+* **1. DC Analizi (`mna.py`):**
+  * Direnç (`R`), Bağımsız Gerilim Kaynakları (`V`), Bağımsız Akım Kaynakları (`I`), DC kararlı durumda `C` (açık devre) ve `L` (kısa devre).
+  * Süper düğüm desteği ve Tellegen güç dengesi doğrulaması ($\sum P = 0$).
+* **2. AC (Fazör) Analizi (`mna.py`):**
   * Kapasitör (`C`) ve Bobin (`L`) admittans damgaları ($Y_C = j\omega C$, $Y_L = 1/j\omega L$).
-  * AC genlik ve faz açısı (`AC <genlik> <faz>`).
   * Karmaşık lineer sistem çözümü: $A(\omega) \cdot x(\omega) = z(\omega)$.
-  * Kutupsal (Polar: $|V|\angle\theta^\circ$), Kartezyen ($a+jb$) ve RMS gösterimi.
-  * Aktif güç ($P$), Reaktif güç ($Q$) ve AC Tellegen güç dengesi ($\sum S = 0$).
-* **Bağımlı Kaynaklar (Tüm 4 Tür):**
-  * **VCVS (`E`):** Gerilim Kontrollü Gerilim Kaynağı ($V = \mu \cdot V_{in}$) — İdeal ve kazançlı Op-Amp modelleri.
-  * **VCCS (`G`):** Gerilim Kontrollü Akım Kaynağı ($I = g_m \cdot V_{in}$) — BJT ve MOSFET küçük işaret modelleri.
-  * **CCVS (`H`):** Akım Kontrollü Gerilim Kaynağı ($V = r \cdot I_{sens}$).
-  * **CCCS (`F`):** Akım Kontrollü Akım Kaynağı ($I = \beta \cdot I_{sens}$) — BJT akım kazancı modelleri.
-* **Geçici (Transient) Analiz:**
+  * Kutupsal ($|V|\angle\theta^\circ$), Kartezyen ($a+jb$), RMS gösterimi; Aktif ($P$), Reaktif ($Q$) güç ve AC Tellegen dengesi ($\sum S = 0$).
+* **3. Bağımlı Kaynaklar (`mna.py`):**
+  * **VCVS (`E`)**, **VCCS (`G`)**, **CCVS (`H`)**, **CCCS (`F`)** — Op-Amp, BJT ve MOSFET küçük işaret modelleri.
+* **4. Geçici (Transient) Analiz (`transient.py`):**
   * Sayısal integrasyon (Yamuk Kuralı - Trapezoidal Companion Model).
-  * Sabit zaman adımı ile tek seferlik matris çarpanlarına ayırma ve ultra hızlı simülasyon.
-  * Basamak ve Sinüzoidal (`SIN(...)`) kaynak desteği.
-  * Konsolda doğrudan **ASCII dalga şekli çizimi**.
-  * Harici kütüphane gerektirmeyen vektörel **SVG grafik çıktısı**.
-* **Laplace / Sembolik Transfer Fonksiyonu $H(s)$:**
-  * Sembolik s-domeni MNA matrisi ve rasyonel polinom aritmetiği ile analitik transfer fonksiyonu $H(s) = \frac{N(s)}{D(s)}$ türetimi.
-  * Otomatik **Kutup ve Sıfır (Poles & Zeros)** tespiti.
-  * **Kararlılık analizi** (Sol yarı s-düzlemi kontrolü).
-  * DC Kazancı ($H(0)$ ve dB değeri).
-  * 2. dereceden filtre parametreleri: Doğal frekans ($\omega_0$), sönüm oranı ($\zeta$), kalite faktörü ($Q$).
+  * Konsolda doğrudan **ASCII dalga şekli çizimi** ve vektörel **SVG grafik çıktısı**.
+* **5. Laplace / Sembolik Transfer Fonksiyonu $H(s)$ (`laplace.py`):**
+  * Sembolik s-domeni MNA matrisi ve rasyonel polinom aritmetiği ile $H(s) = \frac{N(s)}{D(s)}$ türetimi.
+  * Kutup-Sıfır (Poles & Zeros), kararlılık analizi, DC kazancı ve 2. derece filtre parametreleri ($\omega_0, \zeta, Q$).
+* **6. Resimden Netlist (`resimden_netlist.py`):**
+  * **BFS Piksel Tel İzleme (Connected Components):** Şema görüntüsü üzerindeki eleman kutularını maskeler, siyah bağlantı tellerini piksel piksel BFS ile takip ederek düğümleri (`0, 1, 2...`) çıkarır ve otomatik SPICE netlist'e dönüştürür.
+  * **Vision API Desteği:** Anthropic Claude Vision (`ANTHROPIC_API_KEY`) ve Google Gemini Vision (`GEMINI_API_KEY`) ile el çizimi fotoğraflardan doğrudan SPICE netlist üretimi.
+* **7. ngspice ve KCL/KVL Doğrulaması (`ngspice_dogrula.py`):**
+  * Otomatik `ngspice` toplu iş betiği üretimi, çıktı karşılaştırması ve bağımsız Kirchhoff Akımlar/Gerilimler Yasası (KCL & KVL) denetçisi.
 
 ---
 
 ## 🛠️ Kurulum ve Gereksinimler
 
-Proje yalnızca Python 3 ve `numpy` gerektirir:
-
 ```bash
-pip install numpy
+pip install numpy pillow
 ```
 
 ---
 
 ## 💻 Kullanım
 
-### 1. DC Analizi
+### 1. DC Analizi ve Doğrulama
 ```bash
-python3 devre_cozucu/main.py devre_cozucu/ornekler/gerilim_bolucu.cir
-```
-Op-Amp Evirmeyen Yükselteç devresi örneği:
-```bash
+python3 devre_cozucu/main.py devre_cozucu/ornekler/gerilim_bolucu.cir --dogrula
 python3 devre_cozucu/main.py devre_cozucu/ornekler/opamp_evirmeyen_kuvvetlendirici.cir
 ```
 
 ### 2. AC Fazör Analizi
 ```bash
-# RC Alçak Geçiren Filtre analizi:
 python3 devre_cozucu/main.py devre_cozucu/ornekler/rc_alcak_geciren.cir
-
-# RLC Rezonans analizi ve AC MNA matrisi:
 python3 devre_cozucu/main.py devre_cozucu/ornekler/rlc_rezonans.cir --matris
 ```
 
 ### 3. Geçici (Transient) Analiz
 ```bash
-# RC devresi basamak yanıtı (Terminalde ASCII grafik):
 python3 devre_cozucu/main.py devre_cozucu/ornekler/rc_basamak.cir --ciz 2
-
-# RLC az sönümlü salınım ve SVG dosya çıktısı:
 python3 devre_cozucu/main.py devre_cozucu/ornekler/rlc_basamak.cir --ciz 3 --svg rlc.svg
 ```
 
 ### 4. Laplace Sembolik Transfer Fonksiyonu $H(s)$
 ```bash
-# RC Filtre transfer fonksiyonu ve kutup-sıfır analizi:
 python3 devre_cozucu/main.py devre_cozucu/ornekler/rc_alcak_geciren.cir --laplace 2
-
-# RLC 2. derece transfer fonksiyonu, rezonans, Q ve sönüm:
 python3 devre_cozucu/main.py devre_cozucu/ornekler/rlc_rezonans.cir --laplace 3
+```
+
+### 5. Resimden Netlist ve Çözüm
+```bash
+# Örnek şema PNG'si oluşturup piksel tel takibi (BFS) ile netlist çıkar ve çöz:
+python3 devre_cozucu/main.py --ornek-sema gerilim_bolucu --dogrula
+python3 devre_cozucu/main.py --ornek-sema rc_filtre --ac 159.155
+
+# Vision API ile dışarıdan bir devre fotoğrafını çözmek için:
+python3 devre_cozucu/main.py --resim devre_fotografi.jpg
 ```
 
 ---
 
 ## 🧪 Testleri Çalıştırma
 
-Tüm 29 birim testi çalıştırmak için:
+Tüm 34 birim testi çalıştırmak için:
 ```bash
 python3 -m unittest discover -s devre_cozucu -v
-```
-
----
-
-## 📁 Proje Yapısı
-
-```text
-├── devre_cozucu/
-│   ├── netlist.py          # Netlist ayrıştırıcı (parser)
-│   ├── mna.py              # DC ve AC MNA çözücü motoru
-│   ├── transient.py        # Geçici analiz ve grafik çizici
-│   ├── laplace.py          # s-domeni sembolik transfer fonksiyonu ve kutup-sıfır motoru
-│   ├── main.py             # Komut satırı arayüzü ve raporlama
-│   ├── test_mna.py         # Otomatik birim testler (29 test)
-│   └── ornekler/           # Örnek SPICE devre dosyaları (.cir)
-│       ├── gerilim_bolucu.cir
-│       ├── kopru.cir
-│       ├── super_dugum.cir
-│       ├── rc_alcak_geciren.cir
-│       ├── rlc_rezonans.cir
-│       ├── opamp_evirmeyen_kuvvetlendirici.cir
-│       ├── rc_basamak.cir
-│       └── rlc_basamak.cir
-├── memory.md               # Proje yol haritası ve ilerleme notları
-└── README.md
 ```
