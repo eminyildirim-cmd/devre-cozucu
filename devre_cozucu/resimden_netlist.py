@@ -127,7 +127,7 @@ def ocr_kutularindan_elemanlari_ayikla(ocr_kutulari: list[OCRMetinKutusu]) -> li
                 if deger_deseni.match(k2.metin):
                     c2x, c2y = k2.x + k2.w // 2, k2.y + k2.h // 2
                     mesafe = (c1x - c2x) ** 2 + (c1y - c2y) ** 2
-                    if mesafe < en_kisa_mesafe and mesafe < 35000:
+                    if mesafe < en_kisa_mesafe and mesafe < 250000:
                         en_kisa_mesafe = mesafe
                         en_yakin_deger = k2.metin
                         secilen_j = j
@@ -502,29 +502,66 @@ def resimden_cozume(
     elif motor == "gemini" or (motor == "otomatik" and os.environ.get("GEMINI_API_KEY")):
         netlist_metin = gemini_vision_ile_oku(resim_yolu)
     elif tesseract_kurulu_mu():
-        # Çevrimdışı Tesseract OCR ile otomatik metin ve eleman algılama
+        # Çevrimdışı Tesseract OCR ile otomatik metin, konum ve merdiven/köprü topolojisi algılama
         kutular = tesseract_ile_metinleri_tara(resim_yolu)
         ayiklananlar = ocr_kutularindan_elemanlari_ayikla(kutular)
         if not ayiklananlar:
             raise ValueError("Tesseract OCR resim üzerinde herhangi bir devre elemanı (R1, V1 vb.) okuyamadı.")
 
-        satirlar = ["* Tesseract OCR Tarafindan Cikarilan Netlist"]
-        kaynak_var = any(ad.startswith("V") or ad.startswith("I") for ad, _, _ in ayiklananlar)
-        direncler = [item for item in ayiklananlar if item[0].startswith("R") or item[0].startswith("C") or item[0].startswith("L")]
-        kaynaklar = [item for item in ayiklananlar if item[0].startswith("V") or item[0].startswith("I")]
+        with Image.open(resim_yolu) as img:
+            genislik, yukseklik = img.size
 
-        dugum_no = 1
+        satirlar = ["* Tesseract OCR ve Geometrik Topoloji Analizi"]
+
+        kaynaklar = [item for item in ayiklananlar if item[0][0] in ("V", "I")]
+        pasifler = [item for item in ayiklananlar if item[0][0] in ("R", "C", "L")]
+
+        # Soldan sağa (x koordinatına göre) sırala
+        kaynaklar.sort(key=lambda item: item[2][0])
+        pasifler.sort(key=lambda item: item[2][0])
+
+        # Elemanın y koordinatına göre üst telde (seri kol) mi yoksa dikey kolda (paralel/şönt kol) mı olduğunu belirle
+        # Üst çeyrek/üçte birlik bölgedekiler seri (yatay) elemanlar, orta bölgedekiler paralel (dikey) elemanlar
+        seri_elemanlar = []
+        paralel_elemanlar = []
+        for item in pasifler:
+            ad, deg, (cx, cy) = item
+            if cy < yukseklik * 0.32:
+                seri_elemanlar.append(item)
+            else:
+                paralel_elemanlar.append(item)
+
+        # Eğer tüm pasifler aynı seviyede görünüyorsa (basit devre), ilk N-1 tanesi seri, sonuncusu paralel
+        if not seri_elemanlar and len(pasifler) >= 2:
+            seri_elemanlar = pasifler[:-1]
+            paralel_elemanlar = [pasifler[-1]]
+        elif not paralel_elemanlar and len(seri_elemanlar) >= 2:
+            paralel_elemanlar = [seri_elemanlar.pop()]
+
+        # Kaynakları düğüm 1 -> 0 arasına bağla
+        mevcut_dugum = 1
         for ad, deg, _ in kaynaklar:
-            satirlar.append(f"{ad} {dugum_no} 0 {deg}")
+            satirlar.append(f"{ad} {mevcut_dugum} 0 {deg}")
 
-        for i, (ad, deg, _) in enumerate(direncler):
-            d_arti = dugum_no if i == 0 else dugum_no + 1
-            d_eksi = dugum_no + 1 if i < len(direncler) - 1 else 0
-            if len(direncler) == 1 and kaynak_var:
-                d_eksi = 0
-            satirlar.append(f"{ad} {d_arti} {d_eksi} {deg}")
-            if i > 0:
-                dugum_no += 1
+        # Seri elemanları soldan sağa düğüm 1 -> 2, 2 -> 3 ... şeklinde bağla
+        seri_dugum_haritasi: list[tuple[int, int]] = []  # (x_merkez, sag_dugum_no)
+        for ad, deg, (cx, cy) in seri_elemanlar:
+            sol_d = mevcut_dugum
+            sag_d = mevcut_dugum + 1
+            satirlar.append(f"{ad} {sol_d} {sag_d} {deg}")
+            seri_dugum_haritasi.append((cx, sag_d))
+            mevcut_dugum = sag_d
+
+        # Paralel (dikey) elemanları kendilerinden hemen önce gelen seri elemanın çıkış düğümünden toprağa (0) bağla
+        for ad, deg, (px, py) in paralel_elemanlar:
+            bagli_dugum = mevcut_dugum
+            # Bu paralel elemandan daha solda olan en yakın seri elemanın sağ düğümünü bul
+            solundaki_seriler = [sag_d for (sx, sag_d) in seri_dugum_haritasi if sx < px]
+            if solundaki_seriler:
+                bagli_dugum = solundaki_seriler[-1]
+            elif seri_dugum_haritasi:
+                bagli_dugum = 1
+            satirlar.append(f"{ad} {bagli_dugum} 0 {deg}")
 
         netlist_metin = "\n".join(satirlar) + "\n"
     else:

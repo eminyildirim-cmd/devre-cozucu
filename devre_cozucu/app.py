@@ -529,13 +529,13 @@ class DevreHandler(http.server.BaseHTTPRequestHandler):
 
                     eleman_detaylari = []
                     for el in elemanlar:
-                        v = cozum.eleman_gerilimleri.get(el.ad, 0.0)
-                        i = cozum.eleman_akimlari.get(el.ad, 0.0)
-                        p = cozum.eleman_gucleri.get(el.ad, 0.0)
+                        v = cozum.eleman_gerilimleri.get(el.isim, 0.0)
+                        i = cozum.eleman_akimlari.get(el.isim, 0.0)
+                        p = cozum.eleman_gucleri.get(el.isim, 0.0)
                         eleman_detaylari.append({
-                            "ad": el.ad,
-                            "d_arti": el.pozitif_dugum,
-                            "d_eksi": el.negatif_dugum,
+                            "ad": el.isim,
+                            "d_arti": el.dugum_p,
+                            "d_eksi": el.dugum_n,
                             "gerilim": v,
                             "akim": i,
                             "guc": p,
