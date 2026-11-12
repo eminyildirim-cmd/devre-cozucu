@@ -186,3 +186,4 @@ def dogrula(
             "[Not: Sistemde ngspice ikili dosyası bulunmadığından iç doğrulayıcı kullanıldı]."
         ),
     )
+

@@ -3,27 +3,20 @@ Resimden Netlist Çıkarıcı (Görüntü Tanıma -> Devre Grafı -> SPICE Netli
 
 FİKİR VE MİMARİ
 ---------------
-Bir devre şeması fotoğrafından SPICE netlist'i üretmek için literatürde ve
-endüstride iki temel yaklaşım kullanılır. Bu modül her ikisini de içerir:
+Bir devre şeması fotoğrafından SPICE netlist'i üretmek için 3 temel yaklaşım
+desteklenmektedir:
 
-YAKLAŞIM 1 — Vision LLM (Claude / Gemini Vision API) ile Doğrudan Okuma:
-    Devre fotoğrafı (el çizimi veya kitap şeması) Base64 olarak kodlanır ve
-    yapılandırılmış bir mühendislik istemiyle (prompt) Vision API'ye gönderilir.
-    Model elemanları, düğümleri ve kaynak yönlerini okuyup SPICE formatında döner.
-    (Standart kütüphane `urllib.request` kullanır; ek paket kurulumu gerektirmez).
+YAKLAŞIM 1 — Tesseract OCR + Hibrit Piksel/Tel Eşleme (Tamamen Çevrimdışı / Yerel):
+    1. Tesseract OCR çalıştırılarak şema üzerindeki tüm eleman adları ("R1", "V1", "C1")
+       ve değerleri ("1k", "10V", "100n") ile bounding box (x, y, w, h) koordinatları okunur.
+    2. OCR metin kutuları sembollerle eşlenir, tel ağları BFS ile taranır.
 
-YAKLAŞIM 2 — YOLO / Nesne Tespiti + Piksel Tabanlı Tel İzleme (BFS Graf Çıkarımı):
-    Akademik çalışmalarda (örn. CGHD veri seti + YOLO) kullanılan klasik boru hattı:
-    1. Eleman Tespiti: Görüntüdeki elemanların sınıfları, değerleri ve sınır kutuları
-       (bounding box: x1, y1, x2, y2) ile uç (terminal) noktaları belirlenir.
-    2. Eleman Maskeleme: İkili (siyah-beyaz) görüntüde eleman kutularının içi silinir;
-       böylece geriye YALNIZCA bağlantı kabloları (teller) kalır.
-    3. Bağlı Bileşen Analizi (BFS / Flood-Fill): Kalan siyah tel pikselleri üzerinde
-       Genişlik Öncelikli Arama (BFS) yapılarak birbirine bağlı her tel kümesi
-       tek bir "elektriksel düğüm" (node) olarak numaralandırılır.
-    4. Toprak (GND) Eşleştirme: Toprak sembolünün değdiği düğüm '0' yapılır.
-    5. Netlist Üretimi: Her elemanın + ve - uçlarının hangi düğüm kümesine değdiği
-       bulunarak `<İsim> <düğüm+> <düğüm-> <değer>` satırları oluşturulur.
+YAKLAŞIM 2 — Vision LLM (Claude / Gemini Vision API) ile Doğrudan Okuma:
+    Devre fotoğrafı Base64 olarak kodlanır ve Vision API'ye gönderilir.
+
+YAKLAŞIM 3 — YOLO / Nesne Tespiti + BFS Piksel Tel İzleme:
+    Eleman kutuları silinerek kalan kablolar 8-komşuluklu BFS ile tek bir
+    elektriksel düğüm (node) olarak etiketlenir.
 """
 
 from collections import deque
@@ -33,13 +26,118 @@ import json
 import mimetypes
 import os
 import re
+import shutil
+import subprocess
 import urllib.error
 import urllib.request
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from netlist import Netlist, netlist_oku
+
+
+# ==============================================================================
+# YAKLAŞIM 0: TESSERACT OCR İLE ŞEMADAKİ ELEMAN VE DEĞERLERİ OKUMA
+# ==============================================================================
+
+@dataclass
+class OCRMetinKutusu:
+    metin: str
+    x: int
+    y: int
+    w: int
+    h: int
+    guven: float
+
+
+def tesseract_kurulu_mu() -> bool:
+    """Sistemde tesseract OCR ikili dosyasının kurulu olup olmadığını kontrol eder."""
+    return shutil.which("tesseract") is not None
+
+
+def tesseract_ile_metinleri_tara(resim_yolu: str, psm: int = 11) -> list[OCRMetinKutusu]:
+    """Tesseract OCR çalıştırarak resimdeki tüm metin parçalarını ve konumlarını döner."""
+    if not tesseract_kurulu_mu():
+        raise RuntimeError("Sistemde 'tesseract' kurulu değil. (sudo apt install tesseract-ocr)")
+
+    komut = ["tesseract", resim_yolu, "stdout", "--psm", str(psm), "tsv"]
+    sonuc = subprocess.run(komut, capture_output=True, text=True, check=True)
+
+    kutular: list[OCRMetinKutusu] = []
+    satirlar = sonuc.stdout.strip().splitlines()
+    if len(satirlar) <= 1:
+        return kutular
+
+    # TSV Başlığı: level, page_num, block_num, par_num, line_num, word_num, left, top, width, height, conf, text
+    for sat in satirlar[1:]:
+        sutunlar = sat.split("\t")
+        if len(sutunlar) >= 12:
+            try:
+                conf = float(sutunlar[10])
+                metin = sutunlar[11].strip()
+                if conf > 20 and metin:
+                    kutular.append(OCRMetinKutusu(
+                        metin=metin,
+                        x=int(sutunlar[6]),
+                        y=int(sutunlar[7]),
+                        w=int(sutunlar[8]),
+                        h=int(sutunlar[9]),
+                        guven=conf,
+                    ))
+            except (ValueError, IndexError):
+                continue
+    return kutular
+
+
+def ocr_kutularindan_elemanlari_ayikla(ocr_kutulari: list[OCRMetinKutusu]) -> list[tuple[str, str, tuple[int, int]]]:
+    """OCR sonuçlarından eleman ismi ("R1", "V1"), değeri ("1k", "10V") ve merkez koordinatını çıkarır."""
+    bulunanlar: list[tuple[str, str, tuple[int, int]]] = []
+    kullanilan_indeksler = set()
+
+    eleman_deseni = re.compile(r"^([RVICLEGHF]\d*)$", re.IGNORECASE)
+    deger_deseni = re.compile(r"^(\d+(?:\.\d+)?(?:[kmugnpµ]|meg)?(?:v|a|ohm|f|h)?)$", re.IGNORECASE)
+
+    # 1. Aşama: Tek kelimede birleşik yazılanlar (örn. "R1=1k", "R1_1k", "10V")
+    for i, kutu in enumerate(ocr_kutulari):
+        m = re.match(r"^([RVICLEGHF]\d+)[:=\s_-]+(\d+.*)$", kutu.metin, re.IGNORECASE)
+        if m:
+            isim, deger = m.group(1).upper(), m.group(2)
+            cx, cy = kutu.x + kutu.w // 2, kutu.y + kutu.h // 2
+            bulunanlar.append((isim, deger, (cx, cy)))
+            kullanilan_indeksler.add(i)
+
+    # 2. Aşama: Ayrı kelimeler (örn: "R1" kutusu ve yakınındaki "1k" kutusu)
+    for i, k1 in enumerate(ocr_kutulari):
+        if i in kullanilan_indeksler:
+            continue
+        m_isim = eleman_deseni.match(k1.metin)
+        if m_isim:
+            isim = m_isim.group(1).upper()
+            c1x, c1y = k1.x + k1.w // 2, k1.y + k1.h // 2
+
+            # En yakın değer kutusunu ara
+            en_yakin_deger = "1k" if isim[0] == "R" else ("10" if isim[0] == "V" else "1u")
+            en_kisa_mesafe = float("inf")
+            secilen_j = None
+
+            for j, k2 in enumerate(ocr_kutulari):
+                if j == i or j in kullanilan_indeksler:
+                    continue
+                if deger_deseni.match(k2.metin):
+                    c2x, c2y = k2.x + k2.w // 2, k2.y + k2.h // 2
+                    mesafe = (c1x - c2x) ** 2 + (c1y - c2y) ** 2
+                    if mesafe < en_kisa_mesafe and mesafe < 35000:
+                        en_kisa_mesafe = mesafe
+                        en_yakin_deger = k2.metin
+                        secilen_j = j
+
+            bulunanlar.append((isim, en_yakin_deger, (c1x, c1y)))
+            kullanilan_indeksler.add(i)
+            if secilen_j is not None:
+                kullanilan_indeksler.add(secilen_j)
+
+    return bulunanlar
 
 
 # ==============================================================================
@@ -71,7 +169,6 @@ def _netlist_blogunu_ayikla(yanit_metni: str) -> str:
     if kod_eslesme:
         return kod_eslesme.group(1).strip()
 
-    # Kod bloğu yoksa yorum veya eleman satırlarını süz
     satirlar = []
     for s in yanit_metni.splitlines():
         s_temiz = s.strip()
@@ -197,20 +294,11 @@ def gemini_vision_ile_oku(
 
 
 # ==============================================================================
-# YAKLAŞIM 2: YOLO KUTULARI + PİKSEL İZLEME (BFS) İLE GRAF VE NETLİST ÇIKARIMI
+# YAKLAŞIM 2 & 3: YOLO / OCR KUTULARI + BFS PİKSEL TEL TAKİBİ
 # ==============================================================================
 
 @dataclass
 class TespitEdilenEleman:
-    """Görüntü üzerinde (YOLO veya şema okuyucu tarafından) tespit edilen devre elemanı.
-
-    Alanlar:
-        isim  : Eleman adı ("R1", "V1", "GND" vb.)
-        deger : Eleman değeri ("1k", "10", "100n" vb.; GND için "")
-        kutu  : Sınır kutusu (x1, y1, x2, y2) piksel koordinatları
-        uc_p  : + ucun (veya 1. terminalin) görüntünün teliyle buluştuğu (x, y) koordinatı
-        uc_n  : - ucun (veya 2. terminalin) görüntünün teliyle buluştuğu (x, y) koordinatı
-    """
     isim: str
     deger: str
     kutu: tuple[int, int, int, int]
@@ -243,30 +331,18 @@ def goruntuden_netlist_cikar(
     eleman_kutulari: list[TespitEdilenEleman],
     esik: int = 180,
 ) -> str:
-    """Şema görüntüsü ve tespit edilen eleman kutularından BFS tel takibiyle SPICE netlist üretir.
-
-    Algoritma Adımları:
-        1. Görüntüyü gri tonlamaya çevir ve eşikleme (thresholding) ile siyah pikselleri (telleri) bul.
-        2. Eleman sınır kutularının (bounding box) içini maskele (sil) ki elemanın kendi çizimi
-           iki ucunu kısa devre etmesin.
-        3. Geriye kalan tel pikselleri üzerinde BFS (8-komşuluklu bağlı bileşen analizi) çalıştırarak
-           her bağımsız tel ağını numaralandır (1, 2, 3...).
-        5. GND sembolünün bağlı olduğu tel ağını '0' (toprak) olarak işaretle.
-        6. Her elemanın uc_p ve uc_n koordinatlarının hangi tel ağına değdiğini bularak
-           SPICE netlist satırlarını oluştur.
-    """
+    """Şema görüntüsü ve tespit edilen eleman kutularından BFS tel takibiyle SPICE netlist üretir."""
     img = Image.open(resim_yolu).convert("L")
     gri = np.array(img)
-    # Siyah çizgiler = True (1), Beyaz arka plan = False (0)
     tel_maskesi = gri < esik
 
-    # Adım 2: Eleman kutularının içini temizle (yalnızca bağlantı telleri kalsın)
+    # Eleman kutularının içini temizle (yalnızca bağlantı telleri kalsın)
     for el in eleman_kutulari:
         x1, y1, x2, y2 = el.kutu
         tel_maskesi[max(0, y1):min(tel_maskesi.shape[0], y2),
                     max(0, x1):min(tel_maskesi.shape[1], x2)] = False
 
-    # Adım 3: Bağlı Bileşen Analizi (BFS ile Tel / Düğüm Takibi)
+    # Bağlı Bileşen Analizi (BFS ile Tel / Düğüm Takibi)
     yukseklik, genislik = tel_maskesi.shape
     etiket_haritasi = np.zeros((yukseklik, genislik), dtype=int)
     mevcut_etiket = 0
@@ -289,7 +365,7 @@ def goruntuden_netlist_cikar(
                                     etiket_haritasi[ny, nx] = mevcut_etiket
                                     kuyruk.append((nx, ny))
 
-    # Adım 4: Toprak (GND) düğümünü bul
+    # Toprak (GND) düğümünü bul
     toprak_etiketleri = set()
     devre_elemanlari = []
     for el in eleman_kutulari:
@@ -300,7 +376,6 @@ def goruntuden_netlist_cikar(
         else:
             devre_elemanlari.append(el)
 
-    # Eğer açıkça GND sembolü yoksa ilk gerilim kaynağının '-' ucunu toprak kabul et
     if not toprak_etiketleri:
         for el in devre_elemanlari:
             if el.isim[0].upper() == "V" and el.uc_n is not None:
@@ -309,7 +384,6 @@ def goruntuden_netlist_cikar(
                     toprak_etiketleri.add(etiket)
                     break
 
-    # Ham küme etiketlerini temiz SPICE düğüm numaralarına (0, 1, 2...) dönüştür
     dugum_esleme: dict[int, str] = {}
     sayac = 1
     for el in devre_elemanlari:
@@ -325,7 +399,6 @@ def goruntuden_netlist_cikar(
                 dugum_esleme[ham] = str(sayac)
                 sayac += 1
 
-    # Adım 5: SPICE Netlist satırlarını üret
     satirlar = ["* Görüntü işleme (BFS tel izleme) ile otomatik üretilen netlist"]
     for el in devre_elemanlari:
         dp = dugum_esleme[_en_yakin_dugumu_bul(etiket_haritasi, el.uc_p)]
@@ -340,78 +413,75 @@ def goruntuden_netlist_cikar(
 # ==============================================================================
 
 def ornek_sema_olustur(dosya_yolu: str, devre_tipi: str = "gerilim_bolucu") -> list[TespitEdilenEleman]:
-    """Test ve doğrulama için gerçek bir devre şeması görüntüsü (PNG) çizer
-    ve üzerindeki elemanların koordinat kutularını (YOLO çıktısı formatında) döner.
-    """
-    img = Image.new("RGB", (500, 360), "white")
+    """Test ve doğrulama için hem insan gözüne hem de Tesseract OCR'a uygun şema (PNG) çizer."""
+    img = Image.new("RGB", (1000, 720), "white")
     ciz = ImageDraw.Draw(img)
     siyah = (0, 0, 0)
     mavi = (30, 64, 175)
     kirmizi = (185, 28, 28)
 
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
+    except Exception:
+        font = None
+
     if devre_tipi == "gerilim_bolucu":
-        # Teller (Siyah çizgiler, kalınlık=3)
-        # Üst tel: V1 üst ucundan (100, 120) -> (100, 60) -> R1 sol ucuna (180, 60)
-        ciz.line([(100, 120), (100, 60), (180, 60)], fill=siyah, width=3)
-        # Ara tel (Düğüm 2): R1 sağ ucundan (280, 60) -> (380, 60) -> R2 üst ucuna (380, 120)
-        ciz.line([(280, 60), (380, 60), (380, 120)], fill=siyah, width=3)
-        # Alt tel (Toprak - Düğüm 0): V1 alt ucundan (100, 220) -> (100, 290) -> (380, 290) -> R2 alt ucuna (380, 220)
-        ciz.line([(100, 220), (100, 290), (380, 290), (380, 220)], fill=siyah, width=3)
-        # Toprak bağlantı teli: (240, 290) -> (240, 315)
-        ciz.line([(240, 290), (240, 315)], fill=siyah, width=3)
+        # 1000x720 ölçeğinde teller
+        ciz.line([(200, 240), (200, 120), (360, 120)], fill=siyah, width=5)
+        ciz.line([(560, 120), (760, 120), (760, 240)], fill=siyah, width=5)
+        ciz.line([(200, 440), (200, 580), (760, 580), (760, 440)], fill=siyah, width=5)
+        ciz.line([(480, 580), (480, 630)], fill=siyah, width=5)
 
-        # Eleman Sembolleri ve Etiketleri
-        # V1: (70, 125) - (130, 215)
-        ciz.ellipse([75, 130, 125, 210], outline=mavi, width=2)
-        ciz.text((88, 155), "V1\n10V", fill=kirmizi)
+        # Semboller
+        ciz.ellipse([150, 250, 250, 430], outline=mavi, width=4)
+        ciz.text((160, 310), "V1 10V", fill=kirmizi, font=font)
 
-        # R1: (185, 40) - (275, 80)
-        ciz.rectangle([185, 42, 275, 78], outline=mavi, width=2)
-        ciz.text((210, 50), "R1 1k", fill=kirmizi)
+        ciz.rectangle([370, 84, 550, 156], outline=mavi, width=4)
+        ciz.text((410, 100), "R1 1k", fill=kirmizi, font=font)
 
-        # R2: (355, 125) - (405, 215)
-        ciz.rectangle([360, 125, 400, 215], outline=mavi, width=2)
-        ciz.text((365, 160), "R2\n2k", fill=kirmizi)
+        ciz.rectangle([710, 250, 810, 430], outline=mavi, width=4)
+        ciz.text((720, 320), "R2 2k", fill=kirmizi, font=font)
 
-        # GND sembolü: (220, 316) - (260, 345)
-        ciz.line([(225, 318), (255, 318)], fill=mavi, width=3)
-        ciz.line([(230, 325), (250, 325)], fill=mavi, width=2)
-        ciz.line([(235, 332), (245, 332)], fill=mavi, width=2)
+        ciz.line([(450, 636), (510, 636)], fill=mavi, width=5)
+        ciz.line([(460, 650), (500, 650)], fill=mavi, width=4)
+        ciz.line([(470, 664), (490, 664)], fill=mavi, width=3)
+        ciz.text((520, 630), "GND", fill=kirmizi, font=font)
 
         img.save(dosya_yolu)
 
         return [
-            TespitEdilenEleman("V1", "10", (70, 122, 130, 218), uc_p=(100, 120), uc_n=(100, 220)),
-            TespitEdilenEleman("R1", "1k", (182, 38, 278, 82), uc_p=(180, 60), uc_n=(280, 60)),
-            TespitEdilenEleman("R2", "2k", (355, 122, 405, 218), uc_p=(380, 120), uc_n=(380, 220)),
-            TespitEdilenEleman("GND", "", (220, 316, 260, 345), uc_p=(240, 314)),
+            TespitEdilenEleman("V1", "10", (140, 244, 260, 436), uc_p=(200, 240), uc_n=(200, 440)),
+            TespitEdilenEleman("R1", "1k", (364, 76, 556, 164), uc_p=(360, 120), uc_n=(560, 120)),
+            TespitEdilenEleman("R2", "2k", (704, 244, 816, 436), uc_p=(760, 240), uc_n=(760, 440)),
+            TespitEdilenEleman("GND", "", (440, 632, 520, 690), uc_p=(480, 628)),
         ]
 
     elif devre_tipi == "rc_filtre":
-        # Üst tel: Vin (100, 120) -> (100, 60) -> R1 (180, 60)
-        ciz.line([(100, 120), (100, 60), (180, 60)], fill=siyah, width=3)
-        # Sağ üst tel: R1 (280, 60) -> (380, 60) -> C1 (380, 130)
-        ciz.line([(280, 60), (380, 60), (380, 130)], fill=siyah, width=3)
-        # Alt tel: Vin (100, 220) -> (100, 290) -> (380, 290) -> C1 (380, 210)
-        ciz.line([(100, 220), (100, 290), (380, 290), (380, 210)], fill=siyah, width=3)
-        ciz.line([(240, 290), (240, 315)], fill=siyah, width=3)
+        ciz.line([(200, 240), (200, 120), (360, 120)], fill=siyah, width=5)
+        ciz.line([(560, 120), (760, 120), (760, 260)], fill=siyah, width=5)
+        ciz.line([(200, 440), (200, 580), (760, 580), (760, 420)], fill=siyah, width=5)
+        ciz.line([(480, 580), (480, 630)], fill=siyah, width=5)
 
-        ciz.ellipse([75, 130, 125, 210], outline=mavi, width=2)
-        ciz.text((82, 155), "Vin\nAC 10", fill=kirmizi)
-        ciz.rectangle([185, 42, 275, 78], outline=mavi, width=2)
-        ciz.text((210, 50), "R1 1k", fill=kirmizi)
-        ciz.line([(360, 160), (400, 160)], fill=mavi, width=4)
-        ciz.line([(360, 180), (400, 180)], fill=mavi, width=4)
-        ciz.text((405, 160), "C1 1u", fill=kirmizi)
-        ciz.line([(225, 318), (255, 318)], fill=mavi, width=3)
+        ciz.ellipse([150, 250, 250, 430], outline=mavi, width=4)
+        ciz.text((155, 310), "Vin AC 10", fill=kirmizi, font=font)
+
+        ciz.rectangle([370, 84, 550, 156], outline=mavi, width=4)
+        ciz.text((410, 100), "R1 1k", fill=kirmizi, font=font)
+
+        ciz.line([(720, 320), (800, 320)], fill=mavi, width=6)
+        ciz.line([(720, 360), (800, 360)], fill=mavi, width=6)
+        ciz.text((810, 320), "C1 1u", fill=kirmizi, font=font)
+
+        ciz.line([(450, 636), (510, 636)], fill=mavi, width=5)
+        ciz.text((520, 630), "GND", fill=kirmizi, font=font)
 
         img.save(dosya_yolu)
 
         return [
-            TespitEdilenEleman("Vin", "AC 10 0", (70, 122, 130, 218), uc_p=(100, 120), uc_n=(100, 220)),
-            TespitEdilenEleman("R1", "1k", (182, 38, 278, 82), uc_p=(180, 60), uc_n=(280, 60)),
-            TespitEdilenEleman("C1", "1u", (355, 132, 405, 208), uc_p=(380, 130), uc_n=(380, 210)),
-            TespitEdilenEleman("GND", "", (220, 316, 260, 345), uc_p=(240, 314)),
+            TespitEdilenEleman("Vin", "AC 10 0", (140, 244, 260, 436), uc_p=(200, 240), uc_n=(200, 440)),
+            TespitEdilenEleman("R1", "1k", (364, 76, 556, 164), uc_p=(360, 120), uc_n=(560, 120)),
+            TespitEdilenEleman("C1", "1u", (710, 264, 810, 416), uc_p=(760, 260), uc_n=(760, 420)),
+            TespitEdilenEleman("GND", "", (440, 632, 520, 690), uc_p=(480, 628)),
         ]
 
     raise ValueError(f"Bilinmeyen örnek şema tipi: {devre_tipi}")
@@ -422,14 +492,7 @@ def resimden_cozume(
     eleman_kutulari: list[TespitEdilenEleman] | None = None,
     motor: str = "otomatik",
 ) -> tuple[str, Netlist]:
-    """Verilen devre şeması görüntüsünden netlist metnini ve ayrıştırılmış Netlist nesnesini üretir.
-
-    motor:
-        - 'yerel'   : Eleman kutuları + BFS piksel tel takibi kullanır (API anahtarı gerekmez).
-        - 'claude'  : Claude Vision API kullanır (ANTHROPIC_API_KEY gerekir).
-        - 'gemini'  : Gemini Vision API kullanır (GEMINI_API_KEY gerekir).
-        - 'otomatik': eleman_kutulari verilmişse 'yerel', aksi halde ortamda bulunan API anahtarını kullanır.
-    """
+    """Verilen devre şeması görüntüsünden netlist metnini ve ayrıştırılmış Netlist nesnesini üretir."""
     if motor == "yerel" or (motor == "otomatik" and eleman_kutulari is not None):
         if eleman_kutulari is None:
             raise ValueError("Yerel piksel izleme motoru için 'eleman_kutulari' listesi gereklidir.")
@@ -440,7 +503,7 @@ def resimden_cozume(
         netlist_metin = gemini_vision_ile_oku(resim_yolu)
     else:
         raise ValueError(
-            "Görüntü okuma için ya 'eleman_kutulari' (YOLO çıktısı) verilmeli ya da "
+            "Görüntü okuma için ya 'eleman_kutulari' verilmeli ya da "
             "ANTHROPIC_API_KEY / GEMINI_API_KEY ortam değişkenlerinden biri tanımlanmalıdır."
         )
 
