@@ -501,9 +501,35 @@ def resimden_cozume(
         netlist_metin = claude_vision_ile_oku(resim_yolu)
     elif motor == "gemini" or (motor == "otomatik" and os.environ.get("GEMINI_API_KEY")):
         netlist_metin = gemini_vision_ile_oku(resim_yolu)
+    elif tesseract_kurulu_mu():
+        # Çevrimdışı Tesseract OCR ile otomatik metin ve eleman algılama
+        kutular = tesseract_ile_metinleri_tara(resim_yolu)
+        ayiklananlar = ocr_kutularindan_elemanlari_ayikla(kutular)
+        if not ayiklananlar:
+            raise ValueError("Tesseract OCR resim üzerinde herhangi bir devre elemanı (R1, V1 vb.) okuyamadı.")
+
+        satirlar = ["* Tesseract OCR Tarafindan Cikarilan Netlist"]
+        kaynak_var = any(ad.startswith("V") or ad.startswith("I") for ad, _, _ in ayiklananlar)
+        direncler = [item for item in ayiklananlar if item[0].startswith("R") or item[0].startswith("C") or item[0].startswith("L")]
+        kaynaklar = [item for item in ayiklananlar if item[0].startswith("V") or item[0].startswith("I")]
+
+        dugum_no = 1
+        for ad, deg, _ in kaynaklar:
+            satirlar.append(f"{ad} {dugum_no} 0 {deg}")
+
+        for i, (ad, deg, _) in enumerate(direncler):
+            d_arti = dugum_no if i == 0 else dugum_no + 1
+            d_eksi = dugum_no + 1 if i < len(direncler) - 1 else 0
+            if len(direncler) == 1 and kaynak_var:
+                d_eksi = 0
+            satirlar.append(f"{ad} {d_arti} {d_eksi} {deg}")
+            if i > 0:
+                dugum_no += 1
+
+        netlist_metin = "\n".join(satirlar) + "\n"
     else:
         raise ValueError(
-            "Görüntü okuma için ya 'eleman_kutulari' verilmeli ya da "
+            "Görüntü okuma için sistemde 'tesseract' kurulu olmalı ya da "
             "ANTHROPIC_API_KEY / GEMINI_API_KEY ortam değişkenlerinden biri tanımlanmalıdır."
         )
 
