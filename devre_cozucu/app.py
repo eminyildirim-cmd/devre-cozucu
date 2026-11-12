@@ -25,7 +25,7 @@ from netlist import netlist_oku
 from ngspice_dogrula import dogrula
 from resimden_netlist import resimden_cozume
 
-PORT = 8080
+PORT = 8085
 
 HTML_SABLON = """<!DOCTYPE html>
 <html lang="tr">
@@ -490,11 +490,16 @@ HTML_SABLON = """<!DOCTYPE html>
 
 class DevreHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        static_index = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
         if self.path == "/" or self.path == "/index.html":
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(HTML_SABLON.encode("utf-8"))
+            if os.path.exists(static_index):
+                with open(static_index, "rb") as f:
+                    self.wfile.write(f.read())
+            else:
+                self.wfile.write(HTML_SABLON.encode("utf-8"))
         else:
             self.send_error(404, "Bulunamadi")
 
@@ -569,8 +574,12 @@ class DevreHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(icerik)
 
 
+class ReusableTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True
+
+
 def baslat():
-    with socketserver.TCPServer(("", PORT), DevreHandler) as httpd:
+    with ReusableTCPServer(("", PORT), DevreHandler) as httpd:
         print(f"⚡ Devre Çözücü Web Uygulaması Başlatıldı: http://localhost:{PORT}")
         try:
             httpd.serve_forever()
