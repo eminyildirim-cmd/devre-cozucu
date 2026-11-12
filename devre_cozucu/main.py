@@ -13,6 +13,10 @@ Kullanım:
     # Geçici (Transient) analizi:
     python3 main.py ornekler/rc_basamak.cir --tran 10u 5m --ciz 2
     python3 main.py ornekler/rlc_basamak.cir --tran 1u 2m --ciz 2 3 --svg rlc.svg
+
+    # Laplace (s-Domeni) Transfer Fonksiyonu H(s):
+    python3 main.py ornekler/rc_alcak_geciren.cir --laplace 2
+    python3 main.py ornekler/rlc_rezonans.cir --laplace 3
 """
 
 import argparse
@@ -20,6 +24,7 @@ import sys
 
 import numpy as np
 
+from laplace import TransferFonksiyonu, coz_laplace
 from mna import ACCozum, Cozum, DevreHatasi, coz, coz_ac, polar
 from netlist import deger_oku, netlist_oku
 from transient import ascii_ciz, coz_tran, svg_kaydet
@@ -143,7 +148,6 @@ def rapor_tran(c, ciz_dugumler=None, svg_dosya=None):
     print(f"  Zaman Aralığı : 0 -> {bicimle(c.durma_zamani, 's')}")
     print(f"  Zaman Adımı   : {bicimle(c.adimi, 's')} ({len(c.zaman)} adım)")
 
-    # Çizilecek düğümleri belirle (belirtilmemişse '0' hariç tüm düğümler)
     secilenler = []
     if ciz_dugumler:
         for cd in ciz_dugumler:
@@ -153,24 +157,55 @@ def rapor_tran(c, ciz_dugumler=None, svg_dosya=None):
     if not secilenler:
         secilenler = [d for d in c.dugum_voltajlari if d != "0"][:2]
 
-    # Terminalde ASCII çiz
     for d in secilenler:
         print("\n" + ascii_ciz(c.zaman, c.dugum_voltajlari[d], etiket=f"V({d})"))
 
-    # SVG olarak kaydet
     if svg_dosya:
         y_dict = {f"V({d})": c.dugum_voltajlari[d] for d in secilenler}
         svg_kaydet(c.zaman, y_dict, svg_dosya, baslik="Geçici Analiz (Transient Simulation)")
         print(f"\n  ✓ Vektörel grafik kaydedildi: {svg_dosya}")
 
 
+def rapor_laplace(tf: TransferFonksiyonu, cikis_dugumu: str):
+    print(f"\n── Sembolik Laplace Transfer Fonksiyonu: H(s) = V({cikis_dugumu})/V_in ──")
+    print(tf)
+
+    print("── Kutup - Sıfır Analizi ──────────────────────────")
+    if tf.kutuplar:
+        k_str = ", ".join(f"{p.real:.4g}{p.imag:+.4g}j" if abs(p.imag) > 1e-6 else f"{p.real:.4g}" for p in tf.kutuplar)
+        print(f"  Kutuplar (Poles) : {k_str}")
+    else:
+        print("  Kutuplar         : Yok")
+
+    if tf.sifirlar:
+        s_str = ", ".join(f"{z.real:.4g}{z.imag:+.4g}j" if abs(z.imag) > 1e-6 else f"{z.real:.4g}" for z in tf.sifirlar)
+        print(f"  Sıfırlar (Zeros) : {s_str}")
+    else:
+        print("  Sıfırlar         : Yok")
+
+    if tf.dc_kazanci is not None:
+        print(f"  DC Kazancı H(0)  : {tf.dc_kazanci:.4g} ({(20 * np.log10(abs(tf.dc_kazanci)) if tf.dc_kazanci != 0 else -np.inf):.2f} dB)")
+
+    kararlilik_str = "KARARLI (Tüm kutuplar sol yarı s-düzleminde)" if tf.kararli else "KARARSIZ (Sağ yarı düzlemde kutup var)"
+    print(f"  Kararlılık       : {kararlilik_str}")
+
+    if tf.omega_0 is not None:
+        print("\n── 2. Dereceden Sistem Parametreleri ──────────────")
+        print(f"  Doğal Frekans (ω0): {tf.omega_0:.4g} rad/s (f0 ≈ {tf.omega_0 / (2 * np.pi):.4g} Hz)")
+        print(f"  Sönüm Oranı (ζ)   : {tf.sonum_orani_zeta:.4g}")
+        if tf.kalite_faktoru_Q is not None:
+            print(f"  Kalite Faktörü (Q): {tf.kalite_faktoru_Q:.4g}")
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Devre çözücü (DC, AC Fazör ve Geçici Analiz)")
+    ap = argparse.ArgumentParser(description="Devre çözücü (DC, AC Fazör, Geçici ve Laplace MNA)")
     ap.add_argument("dosya", help="netlist dosyası (.cir)")
     ap.add_argument("--ac", nargs="?", const="1k", default=None,
                     help="AC fazör analizi yap (opsiyonel frekans, örn: --ac 1k)")
     ap.add_argument("--tran", nargs=2, metavar=("TSTEP", "TSTOP"), default=None,
                     help="Geçici analiz yap (adım ve süre, örn: --tran 10u 5m)")
+    ap.add_argument("--laplace", metavar="CIKIS_DUGUMU", default=None,
+                    help="Sembolik Laplace transfer fonksiyonu H(s) türet (örn: --laplace 2)")
     ap.add_argument("--ciz", nargs="*", default=None,
                     help="Grafiği çizilecek düğüm voltajları (örn: --ciz 2 3)")
     ap.add_argument("--svg", default=None,
@@ -183,7 +218,9 @@ def main():
             elemanlar = netlist_oku(f.read())
 
         # Mod tespiti
-        if args.tran is not None or elemanlar.tran is not None:
+        if args.laplace is not None:
+            mod = "LAPLACE"
+        elif args.tran is not None or elemanlar.tran is not None:
             mod = "TRAN"
             if args.tran is not None:
                 tstep = deger_oku(args.tran[0])
@@ -200,7 +237,10 @@ def main():
         for e in elemanlar:
             print(f"  {e}")
 
-        if mod == "TRAN":
+        if mod == "LAPLACE":
+            tf = coz_laplace(elemanlar, cikis_dugumu=args.laplace)
+            rapor_laplace(tf, args.laplace)
+        elif mod == "TRAN":
             c_tran = coz_tran(elemanlar, tstep, tstop)
             rapor_tran(c_tran, args.ciz, args.svg)
         elif mod == "AC":

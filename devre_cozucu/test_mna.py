@@ -5,6 +5,7 @@ import unittest
 
 import numpy as np
 
+from laplace import coz_laplace
 from mna import DevreHatasi, coz, coz_ac, polar
 from netlist import deger_oku, netlist_oku
 from transient import ascii_ciz, coz_tran, svg_kaydet
@@ -20,6 +21,10 @@ def cozumle_ac(metin, frekans=None):
 
 def cozumle_tran(metin, tstep, tstop):
     return coz_tran(netlist_oku(metin), tstep, tstop)
+
+
+def cozumle_laplace(metin, cikis_dugumu):
+    return coz_laplace(netlist_oku(metin), cikis_dugumu=cikis_dugumu)
 
 
 class DegerOkuma(unittest.TestCase):
@@ -156,10 +161,6 @@ class ACCozumTest(unittest.TestCase):
 
 class GeciciAnalizTest(unittest.TestCase):
     def test_rc_basamak_yaniti(self):
-        # R = 1k, C = 1u -> tau = 1 ms
-        # 10 V basamak uygulandığında:
-        # t = tau (1 ms) anında V_C = 10 * (1 - e^-1) ≈ 6.3212 V
-        # t = 5 tau (5 ms) anında V_C ≈ 9.9326 V
         netlist = "Vin 1 0 10\nR1 1 2 1k\nC1 2 0 1u"
         c = cozumle_tran(netlist, tstep=2e-6, tstop=5e-3)
 
@@ -173,9 +174,6 @@ class GeciciAnalizTest(unittest.TestCase):
         self.assertAlmostEqual(v_5ms, beklenen_5ms, delta=0.01)
 
     def test_rl_basamak_yaniti(self):
-        # R = 100, L = 100mH -> tau = L / R = 1 ms
-        # 10 V basamak uygulandığında:
-        # t = 1 ms anında i_L = (10 / 100) * (1 - e^-1) = 0.1 * 0.63212 ≈ 63.21 mA
         netlist = "Vin 1 0 10\nR1 1 2 100\nL1 2 0 100m"
         c = cozumle_tran(netlist, tstep=2e-6, tstop=5e-3)
 
@@ -194,6 +192,37 @@ class GeciciAnalizTest(unittest.TestCase):
         svg_kaydet(c.zaman, {"V(2)": c.dugum_voltajlari["2"]}, test_svg)
         self.assertTrue(os.path.exists(test_svg))
         os.remove(test_svg)
+
+
+class LaplaceTest(unittest.TestCase):
+    def test_laplace_rc_filtre(self):
+        # R = 1k, C = 1u -> H(s) = 1000 / (s + 1000)
+        netlist = "Vin 1 0 10\nR1 1 2 1k\nC1 2 0 1u"
+        tf = cozumle_laplace(netlist, cikis_dugumu="2")
+
+        self.assertEqual(len(tf.kutuplar), 1)
+        self.assertAlmostEqual(tf.kutuplar[0].real, -1000.0, places=2)
+        self.assertTrue(tf.kararli)
+        self.assertAlmostEqual(tf.dc_kazanci, 1.0, places=4)
+
+    def test_laplace_rlc_ikinci_derece(self):
+        # R = 10, L = 10mH, C = 100nF -> H(s) = 1e9 / (s^2 + 1000s + 1e9)
+        netlist = "Vin 1 0 10\nR1 1 2 10\nL1 2 3 10m\nC1 3 0 100n"
+        tf = cozumle_laplace(netlist, cikis_dugumu="3")
+
+        self.assertEqual(len(tf.kutuplar), 2)
+        self.assertAlmostEqual(tf.kutuplar[0].real, -500.0, places=1)
+        self.assertAlmostEqual(abs(tf.kutuplar[0].imag), 31618.82, delta=1.0)
+        self.assertAlmostEqual(tf.omega_0, 31622.78, delta=1.0)
+        self.assertAlmostEqual(tf.kalite_faktoru_Q, 31.62, delta=0.1)
+        self.assertTrue(tf.kararli)
+        self.assertAlmostEqual(tf.dc_kazanci, 1.0, places=4)
+
+    def test_laplace_opamp_kazanc(self):
+        # Av = 1 + 9k/1k = 10
+        netlist = "Vin 1 0 1\nEopamp 3 0 1 2 100k\nRf 3 2 9k\nR1 2 0 1k"
+        tf = cozumle_laplace(netlist, cikis_dugumu="3")
+        self.assertAlmostEqual(tf.dc_kazanci, 10.0, places=2)
 
 
 class Hatalar(unittest.TestCase):

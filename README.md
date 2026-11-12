@@ -2,7 +2,7 @@
 
 Devre Analizi ve *Circuits & Systems* çalışmaları için geliştirilmiş, **Değiştirilmiş Düğüm Analizi (Modified Nodal Analysis - MNA)** tabanlı devre simülatörü.
 
-SPICE formatında netlist dosyalarını okuyarak DC, AC (fazör) ve Geçici (transient) analizlerini adım adım damga (stamp) yöntemiyle çözer.
+SPICE formatında netlist dosyalarını okuyarak DC, AC (fazör), Geçici (transient) ve Laplace sembolik transfer fonksiyonu analizlerini adım adım damga (stamp) yöntemiyle çözer.
 
 ---
 
@@ -29,9 +29,12 @@ SPICE formatında netlist dosyalarını okuyarak DC, AC (fazör) ve Geçici (tra
   * Basamak ve Sinüzoidal (`SIN(...)`) kaynak desteği.
   * Konsolda doğrudan **ASCII dalga şekli çizimi**.
   * Harici kütüphane gerektirmeyen vektörel **SVG grafik çıktısı**.
-* **Sıradaki Geliştirmeler:**
-  * Laplace / SymPy ile sembolik transfer fonksiyonu $H(s)$ türetimi.
-  * Resimden netlist (Claude Vision API / YOLO) ve `ngspice` doğrulaması.
+* **Laplace / Sembolik Transfer Fonksiyonu $H(s)$:**
+  * Sembolik s-domeni MNA matrisi ve rasyonel polinom aritmetiği ile analitik transfer fonksiyonu $H(s) = \frac{N(s)}{D(s)}$ türetimi.
+  * Otomatik **Kutup ve Sıfır (Poles & Zeros)** tespiti.
+  * **Kararlılık analizi** (Sol yarı s-düzlemi kontrolü).
+  * DC Kazancı ($H(0)$ ve dB değeri).
+  * 2. dereceden filtre parametreleri: Doğal frekans ($\omega_0$), sönüm oranı ($\zeta$), kalite faktörü ($Q$).
 
 ---
 
@@ -74,11 +77,20 @@ python3 devre_cozucu/main.py devre_cozucu/ornekler/rc_basamak.cir --ciz 2
 python3 devre_cozucu/main.py devre_cozucu/ornekler/rlc_basamak.cir --ciz 3 --svg rlc.svg
 ```
 
+### 4. Laplace Sembolik Transfer Fonksiyonu $H(s)$
+```bash
+# RC Filtre transfer fonksiyonu ve kutup-sıfır analizi:
+python3 devre_cozucu/main.py devre_cozucu/ornekler/rc_alcak_geciren.cir --laplace 2
+
+# RLC 2. derece transfer fonksiyonu, rezonans, Q ve sönüm:
+python3 devre_cozucu/main.py devre_cozucu/ornekler/rlc_rezonans.cir --laplace 3
+```
+
 ---
 
 ## 🧪 Testleri Çalıştırma
 
-Tüm 26 birim testi çalıştırmak için:
+Tüm 29 birim testi çalıştırmak için:
 ```bash
 python3 -m unittest discover -s devre_cozucu -v
 ```
@@ -92,8 +104,9 @@ python3 -m unittest discover -s devre_cozucu -v
 │   ├── netlist.py          # Netlist ayrıştırıcı (parser)
 │   ├── mna.py              # DC ve AC MNA çözücü motoru
 │   ├── transient.py        # Geçici analiz ve grafik çizici
+│   ├── laplace.py          # s-domeni sembolik transfer fonksiyonu ve kutup-sıfır motoru
 │   ├── main.py             # Komut satırı arayüzü ve raporlama
-│   ├── test_mna.py         # Otomatik birim testler (26 test)
+│   ├── test_mna.py         # Otomatik birim testler (29 test)
 │   └── ornekler/           # Örnek SPICE devre dosyaları (.cir)
 │       ├── gerilim_bolucu.cir
 │       ├── kopru.cir
