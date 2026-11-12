@@ -1,0 +1,17 @@
+* Wheatstone köprüsü + akım kaynağı (karışık kaynaklı örnek)
+*
+*        R1        R2
+*   1 ──/\/\── 2 ──/\/\── 3
+*   │          │          │
+*  V1 (+12V)   R5         I1 (2 mA, 0'dan 3'e basıyor)
+*   │          │          │
+*   0 ──/\/\── 4 ──/\/\── 0
+*        R3        R4
+V1  1  0  12
+R1  1  2  1k
+R2  2  3  2k
+R3  1  4  3k
+R4  4  0  1k
+R5  2  4  4.7k
+R6  2  0  10k
+I1  0  3  2m

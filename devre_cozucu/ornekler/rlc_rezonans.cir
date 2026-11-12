@@ -1,0 +1,13 @@
+* Seri RLC Rezonans Devresi
+* L = 10 mH, C = 100 nF, R = 10 ohm
+* Rezonans frekansı: f0 = 1 / (2*pi*sqrt(L*C)) ≈ 5032.92 Hz
+* Rezonansta Z_L + Z_C = 0 olur; empedans saf omiktir (Z = R = 10 ohm).
+* Düğüm 1: Giriş (10 V ∠ 0°)
+* Akım: I = 10 V / 10 ohm = 1.0 A ∠ 0°
+.ac 5032.92
+
+Vin 1 0 AC 10 0
+R1  1 2 10
+L1  2 3 10m
+C1  3 0 100n
+

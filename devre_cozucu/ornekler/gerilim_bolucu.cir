@@ -1,0 +1,5 @@
+* Basit gerilim bölücü
+* Beklenen: V(2) = 10 * 2k/(1k+2k) = 6.667 V, akım = 3.333 mA
+V1  1  0  10
+R1  1  2  1k
+R2  2  0  2k

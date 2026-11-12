@@ -1,0 +1,8 @@
+* İki toprak-dışı düğüm arasında gerilim kaynağı (ders kitabındaki "süper düğüm" durumu)
+* MNA bunu özel işlem gerektirmeden çözer.
+V1  1  0  10
+R1  1  2  2
+V2  2  3  4      ; süper düğüm: 2 ve 3 arasında kaynak
+R2  2  0  4
+R3  3  0  8
+I1  0  3  1

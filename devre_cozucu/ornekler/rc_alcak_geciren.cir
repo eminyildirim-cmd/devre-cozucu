@@ -1,0 +1,9 @@
+* RC Alçak Geçiren Filtre (Low-Pass Filter)
+* Kesim frekansı: fc = 1 / (2*pi*R*C) = 1 / (2*pi*1000*1e-6) ≈ 159.155 Hz
+* Kesim frekansında çıkış gerilimi girişin 1/sqrt(2)'si (~%70.7) ve faz -45° olmalıdır.
+.ac 159.155
+
+Vin 1 0 AC 10 0
+R1  1 2 1k
+C1  2 0 1u
+

@@ -1,0 +1,21 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Sanal ortam (Virtual environment)
+venv/
+env/
+.env
+
+# IDE ve geçici dosyalar
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test ve simülasyon çıktıları
+.pytest_cache/
+*.raw
