@@ -19,3 +19,5 @@ env/
 # Test ve simülasyon çıktıları
 .pytest_cache/
 *.raw
+*.svg
+

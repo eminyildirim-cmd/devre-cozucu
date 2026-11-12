@@ -9,6 +9,10 @@ Kullanım:
     # AC (Fazör) analizi:
     python3 main.py ornekler/rc_alcak_geciren.cir --ac 1k
     python3 main.py ornekler/rlc_rezonans.cir --ac 5032.9 --matris
+
+    # Geçici (Transient) analizi:
+    python3 main.py ornekler/rc_basamak.cir --tran 10u 5m --ciz 2
+    python3 main.py ornekler/rlc_basamak.cir --tran 1u 2m --ciz 2 3 --svg rlc.svg
 """
 
 import argparse
@@ -18,6 +22,7 @@ import numpy as np
 
 from mna import ACCozum, Cozum, DevreHatasi, coz, coz_ac, polar
 from netlist import deger_oku, netlist_oku
+from transient import ascii_ciz, coz_tran, svg_kaydet
 
 
 def bicimle(deger: float, birim: str) -> str:
@@ -34,7 +39,6 @@ def bicimle(deger: float, birim: str) -> str:
 
 
 def fazor_bicimle(z: complex, birim: str) -> str:
-    """Karmaşık fazörü hem kutupsal (genlik ∠ faz°) hem kartezyen (a + jb) olarak biçimler."""
     genlik, faz = polar(z)
     genlik_str = bicimle(genlik, birim)
     faz_str = f"{faz:+.2f}°"
@@ -71,18 +75,17 @@ def rapor_dc(elemanlar, c: Cozum, matris=False):
             print(f"  V({d}) = {bicimle(v, 'V')}")
 
     print("\n── Elemanlar ───────────────────────────────────────")
-    print(f"  {'İsim':<6}{'Düğümler':<12}{'Gerilim':>12}{'Akım (+→-)':>14}{'Güç':>14}   Durum")
+    print(f"  {'İsim':<8}{'Düğümler':<12}{'Gerilim':>12}{'Akım (+→-)':>14}{'Güç':>14}   Durum")
     for e in elemanlar:
         p = c.eleman_gucleri[e.isim]
         durum = "güç veriyor" if p < -1e-15 else ("güç tüketiyor" if p > 1e-15 else "—")
         print(
-            f"  {e.isim:<6}{e.dugum_p + ' → ' + e.dugum_n:<12}"
+            f"  {e.isim:<8}{e.dugum_p + ' → ' + e.dugum_n:<12}"
             f"{bicimle(c.eleman_gerilimleri[e.isim], 'V'):>12}"
             f"{bicimle(c.eleman_akimlari[e.isim], 'A'):>14}"
             f"{bicimle(p, 'W'):>14}   {durum}"
         )
 
-    # Tellegen teoremi: Σ P = 0
     toplam = sum(c.eleman_gucleri.values())
     verilen = -sum(p for p in c.eleman_gucleri.values() if p < 0)
     print(f"\n  Güç dengesi (Tellegen): Σ P = {toplam:.3e} W  "
@@ -100,14 +103,14 @@ def rapor_ac(elemanlar, c: ACCozum, matris=False):
             print(f"  V({d}) = {fazor_bicimle(v, 'V')}  [RMS: {bicimle(v_rms, 'V')}]")
 
     print("\n── Elemanlar (Fazör Gerilim & Akım) ────────────────")
-    print(f"  {'İsim':<6}{'Düğümler':<10}{'Gerilim (Tepe ∠ Faz)':<32}{'Akım (Tepe ∠ Faz)':<32}")
+    print(f"  {'İsim':<8}{'Düğümler':<10}{'Gerilim (Tepe ∠ Faz)':<32}{'Akım (Tepe ∠ Faz)':<32}")
     for e in elemanlar:
         v = c.eleman_gerilimleri[e.isim]
         i = c.eleman_akimlari[e.isim]
-        print(f"  {e.isim:<6}{e.dugum_p + ' → ' + e.dugum_n:<10}{fazor_bicimle(v, 'V'):<32}{fazor_bicimle(i, 'A'):<32}")
+        print(f"  {e.isim:<8}{e.dugum_p + ' → ' + e.dugum_n:<10}{fazor_bicimle(v, 'V'):<32}{fazor_bicimle(i, 'A'):<32}")
 
     print("\n── Eleman Güçleri (S = P + jQ) ─────────────────────")
-    print(f"  {'İsim':<6}{'Görünür (|S|)':>14}{'Aktif (P)':>14}{'Reaktif (Q)':>14}   Karakter")
+    print(f"  {'İsim':<8}{'Görünür (|S|)':>14}{'Aktif (P)':>14}{'Reaktif (Q)':>14}   Karakter")
     for e in elemanlar:
         s = c.eleman_gucleri[e.isim]
         p = s.real
@@ -124,25 +127,54 @@ def rapor_ac(elemanlar, c: ACCozum, matris=False):
             karakter = "—"
 
         print(
-            f"  {e.isim:<6}"
+            f"  {e.isim:<8}"
             f"{bicimle(abs(s), 'VA'):>14}"
             f"{bicimle(p, 'W'):>14}"
             f"{bicimle(q, 'VAR'):>14}   {karakter}"
         )
 
-    # Tellegen karmaşık güç dengesi: Σ S = Σ P + j Σ Q = 0
     toplam_s = sum(c.eleman_gucleri.values())
-    toplam_p = toplam_s.real
-    toplam_q = toplam_s.imag
-    print(f"\n  AC Güç dengesi (Tellegen): Σ S = {toplam_p:+.3e} W  {toplam_q:+.3e}j VAR  "
+    print(f"\n  AC Güç dengesi (Tellegen): Σ S = {toplam_s.real:+.3e} W  {toplam_s.imag:+.3e}j VAR  "
           f"{'✓' if abs(toplam_s) <= 1e-9 else '✗ HATA'}")
 
 
+def rapor_tran(c, ciz_dugumler=None, svg_dosya=None):
+    print(f"\n── Geçici (Transient) Analiz Sonuçları ─────────────────")
+    print(f"  Zaman Aralığı : 0 -> {bicimle(c.durma_zamani, 's')}")
+    print(f"  Zaman Adımı   : {bicimle(c.adimi, 's')} ({len(c.zaman)} adım)")
+
+    # Çizilecek düğümleri belirle (belirtilmemişse '0' hariç tüm düğümler)
+    secilenler = []
+    if ciz_dugumler:
+        for cd in ciz_dugumler:
+            d_norm = cd.replace("V(", "").replace(")", "").strip()
+            if d_norm in c.dugum_voltajlari:
+                secilenler.append(d_norm)
+    if not secilenler:
+        secilenler = [d for d in c.dugum_voltajlari if d != "0"][:2]
+
+    # Terminalde ASCII çiz
+    for d in secilenler:
+        print("\n" + ascii_ciz(c.zaman, c.dugum_voltajlari[d], etiket=f"V({d})"))
+
+    # SVG olarak kaydet
+    if svg_dosya:
+        y_dict = {f"V({d})": c.dugum_voltajlari[d] for d in secilenler}
+        svg_kaydet(c.zaman, y_dict, svg_dosya, baslik="Geçici Analiz (Transient Simulation)")
+        print(f"\n  ✓ Vektörel grafik kaydedildi: {svg_dosya}")
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Devre çözücü (DC ve AC Fazör MNA)")
+    ap = argparse.ArgumentParser(description="Devre çözücü (DC, AC Fazör ve Geçici Analiz)")
     ap.add_argument("dosya", help="netlist dosyası (.cir)")
     ap.add_argument("--ac", nargs="?", const="1k", default=None,
-                    help="AC fazör analizi yap (opsiyonel frekans, örn: --ac 1k, varsayılan 1 kHz)")
+                    help="AC fazör analizi yap (opsiyonel frekans, örn: --ac 1k)")
+    ap.add_argument("--tran", nargs=2, metavar=("TSTEP", "TSTOP"), default=None,
+                    help="Geçici analiz yap (adım ve süre, örn: --tran 10u 5m)")
+    ap.add_argument("--ciz", nargs="*", default=None,
+                    help="Grafiği çizilecek düğüm voltajları (örn: --ciz 2 3)")
+    ap.add_argument("--svg", default=None,
+                    help="Grafiği SVG dosyası olarak kaydet (örn: --svg cikis.svg)")
     ap.add_argument("--matris", action="store_true", help="kurulan MNA matrisini göster")
     args = ap.parse_args()
 
@@ -150,28 +182,28 @@ def main():
         with open(args.dosya, encoding="utf-8") as f:
             elemanlar = netlist_oku(f.read())
 
-        # AC analizi koşulları:
-        # 1) Kullanıcı açıkça --ac parametresi vermişse
-        # 2) Netlist dosyasında .ac komutu varsa
-        # 3) Devrede C veya L elemanı bulunuyorsa
-        ac_mod = False
-        frekans = 1000.0
+        # Mod tespiti
+        if args.tran is not None or elemanlar.tran is not None:
+            mod = "TRAN"
+            if args.tran is not None:
+                tstep = deger_oku(args.tran[0])
+                tstop = deger_oku(args.tran[1])
+            else:
+                tstep, tstop = elemanlar.tran
+        elif args.ac is not None or elemanlar.frekans is not None or any(e.ac_genlik > 0 for e in elemanlar):
+            mod = "AC"
+            frekans = deger_oku(args.ac) if args.ac is not None else (elemanlar.frekans or 1000.0)
+        else:
+            mod = "DC"
 
-        if args.ac is not None:
-            ac_mod = True
-            frekans = deger_oku(args.ac)
-        elif elemanlar.frekans is not None:
-            ac_mod = True
-            frekans = elemanlar.frekans
-        elif any(e.tur in ("C", "L") or e.ac_genlik > 0 for e in elemanlar):
-            ac_mod = True
-            frekans = 1000.0
-
-        print(f"Devre: {args.dosya}  ({len(elemanlar)} eleman, Mod: {'AC Fazör' if ac_mod else 'DC'})")
+        print(f"Devre: {args.dosya}  ({len(elemanlar)} eleman, Mod: {mod})")
         for e in elemanlar:
             print(f"  {e}")
 
-        if ac_mod:
+        if mod == "TRAN":
+            c_tran = coz_tran(elemanlar, tstep, tstop)
+            rapor_tran(c_tran, args.ciz, args.svg)
+        elif mod == "AC":
             c_ac = coz_ac(elemanlar, frekans=frekans)
             rapor_ac(elemanlar, c_ac, args.matris)
         else:

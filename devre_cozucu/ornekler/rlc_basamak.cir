@@ -1,0 +1,9 @@
+* Seri RLC Basamak Yanıtı (Az Sönümlü Salınım / Underdamped Ringing)
+* R = 10 ohm, L = 10 mH, C = 1 uF
+* İkinci dereceden sistem basamak yanıtı: aşım (overshoot) ve sönümlü sinüs dalgası
+.tran 5u 10m
+
+Vin 1 0 10
+R1  1 2 10
+L1  2 3 10m
+C1  3 0 1u

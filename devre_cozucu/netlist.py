@@ -11,23 +11,23 @@ Netlist, devreyi metin olarak tarif eder. Desteklenen elemanlar:
     Bağımsız Kaynaklar:
         V1  1  0  5               -> DC 5 V gerilim kaynağı
         V2  1  0  AC 10 45        -> AC 10 V (tepe), 45° fazlı kaynak
+        V3  1  0  SIN(0 10 1k)    -> Sinüzoidal kaynak (offset=0, genlik=10V, f=1kHz)
         I1  0  2  2m              -> 2 mA akım kaynağı (0 -> 2 yönünde)
         I2  0  2  AC 5m -90       -> AC 5 mA, -90° fazlı kaynak
 
-    Bağımlı Kaynaklar (SPICE standardı):
-        E1  out+ out- in+ in- kazanc   -> VCVS: Gerilim Kontrollü Gerilim Kaynağı: V(out) = kazanc · V(in)
-        G1  out+ out- in+ in- gm       -> VCCS: Gerilim Kontrollü Akım Kaynağı:    I(out) = gm · V(in)
-        H1  out+ out- Vsens r          -> CCVS: Akım Kontrollü Gerilim Kaynağı:   V(out) = r · I(Vsens)
-        F1  out+ out- Vsens beta       -> CCCS: Akım Kontrollü Akım Kaynağı:      I(out) = beta · I(Vsens)
+    Bağımlı Kaynaklar:
+        E1  out+ out- in+ in- kazanc   -> VCVS: Gerilim Kontrollü Gerilim Kaynağı
+        G1  out+ out- in+ in- gm       -> VCCS: Gerilim Kontrollü Akım Kaynağı
+        H1  out+ out- Vsens r          -> CCVS: Akım Kontrollü Gerilim Kaynağı
+        F1  out+ out- Vsens beta       -> CCCS: Akım Kontrollü Akım Kaynağı
 
     Simülasyon Komutları:
-        .ac 1k                    -> 1 kHz AC analizi
-
-Düğüm "0" veya "gnd" toprak kabul edilir.
-'*' ile başlayan satırlar ve ';' sonrası yorumdur.
+        .ac 1k                    -> 1 kHz AC fazör analizi
+        .tran 10u 5m              -> Geçici (transient) analiz (adım=10µs, süre=5ms)
 """
 
 from dataclasses import dataclass
+import re
 
 TOPRAK_ISIMLERI = {"0", "gnd", "GND"}
 
@@ -71,12 +71,14 @@ class Eleman:
     tur: str                # "R", "C", "L", "V", "I", "E", "G", "H", "F"
     dugum_p: str            # + düğüm
     dugum_n: str            # - düğüm
-    deger: float            # R, C, L, V/I DC değeri veya bağımlı kaynak kazancı (μ, gm, r, β)
+    deger: float            # R, C, L, V/I DC değeri veya bağımlı kaynak kazancı
     ac_genlik: float = 0.0  # AC tepe genliği
     ac_faz: float = 0.0     # AC faz açısı (derece)
     kontrol_p: str = ""     # E ve G için kontrol + düğümü
     kontrol_n: str = ""     # E ve G için kontrol - düğümü
     kontrol_kaynak: str = ""  # H ve F için kontrol gerilim kaynağı adı
+    dalga_tipi: str = "DC"  # "DC", "SIN", "PULSE"
+    dalga_param: tuple = () # Sin için: (offset, genlik, frekans)
 
     def __str__(self):
         if self.tur in ("E", "G"):
@@ -85,6 +87,8 @@ class Eleman:
         elif self.tur in ("H", "F"):
             tur_ad = "CCVS" if self.tur == "H" else "CCCS"
             return f"{self.isim} ({self.dugum_p} → {self.dugum_n}) = {self.deger:g} × I({self.kontrol_kaynak}) [{tur_ad}]"
+        elif self.dalga_tipi == "SIN":
+            return f"{self.isim} ({self.dugum_p} → {self.dugum_n}) = SIN(offset={self.dalga_param[0]}, genlik={self.dalga_param[1]}, f={self.dalga_param[2]})"
         elif self.tur in ("V", "I") and self.ac_genlik > 0:
             faz_str = f"∠{self.ac_faz:g}°" if self.ac_faz != 0 else ""
             return f"{self.isim} ({self.dugum_p} → {self.dugum_n}) = DC {self.deger:g}, AC {self.ac_genlik:g}{faz_str}"
@@ -92,9 +96,10 @@ class Eleman:
 
 
 class Netlist(list):
-    def __init__(self, elemanlar=None, frekans: float | None = None):
+    def __init__(self, elemanlar=None, frekans: float | None = None, tran: tuple[float, float] | None = None):
         super().__init__(elemanlar or [])
         self.frekans = frekans
+        self.tran = tran  # (tstep, tstop)
 
 
 DESTEKLENEN_TURLER = {"R", "V", "I", "C", "L", "E", "G", "H", "F"}
@@ -108,6 +113,7 @@ def netlist_oku(metin: str) -> Netlist:
     elemanlar = []
     isimler = set()
     devre_frekans: float | None = None
+    tran_bilgisi: tuple[float, float] | None = None
 
     for satir_no, satir in enumerate(metin.splitlines(), start=1):
         satir = satir.split(";")[0].strip()
@@ -128,6 +134,15 @@ def netlist_oku(metin: str) -> Netlist:
                         break
                     except ValueError:
                         continue
+            elif kucuk.startswith(".tran"):
+                parcalar = kucuk.split()
+                if len(parcalar) >= 3:
+                    try:
+                        tstep = deger_oku(parcalar[1])
+                        tstop = deger_oku(parcalar[2])
+                        tran_bilgisi = (tstep, tstop)
+                    except ValueError:
+                        pass
             continue
 
         parcalar = satir.split()
@@ -148,6 +163,8 @@ def netlist_oku(metin: str) -> Netlist:
         kontrol_p = ""
         kontrol_n = ""
         kontrol_kaynak = ""
+        dalga_tipi = "DC"
+        dalga_param = ()
         deger = 0.0
         ac_genlik = 0.0
         ac_faz = 0.0
@@ -161,41 +178,52 @@ def netlist_oku(metin: str) -> Netlist:
                 raise ValueError(f"Satır {satir_no}: {tur_ad} pozitif olmalı")
 
         elif tur in ("E", "G"):
-            # Format: E1 out+ out- in+ in- kazanc  (6 alan)
             if len(parcalar) != 6:
-                raise ValueError(f"Satır {satir_no}: {tur} (VCVS/VCCS) için 6 alan bekleniyordu (isim d+ d- in+ in- kazanc): '{satir}'")
+                raise ValueError(f"Satır {satir_no}: {tur} için 6 alan bekleniyordu: '{satir}'")
             kontrol_p = dugum_normalle(parcalar[3])
             kontrol_n = dugum_normalle(parcalar[4])
             deger = deger_oku(parcalar[5])
 
         elif tur in ("H", "F"):
-            # Format: H1 out+ out- Vkontrol kazanc  (5 alan)
             if len(parcalar) != 5:
-                raise ValueError(f"Satır {satir_no}: {tur} (CCVS/CCCS) için 5 alan bekleniyordu (isim d+ d- Vkontrol kazanc): '{satir}'")
+                raise ValueError(f"Satır {satir_no}: {tur} için 5 alan bekleniyordu: '{satir}'")
             kontrol_kaynak = parcalar[3]
             deger = deger_oku(parcalar[4])
 
         elif tur in ("V", "I"):
-            kalan = parcalar[3:]
-            idx = 0
-            while idx < len(kalan):
-                token = kalan[idx].upper()
-                if token == "DC":
-                    idx += 1
-                    if idx < len(kalan):
+            # Satırın geri kalanı
+            kalan_str = " ".join(parcalar[3:])
+            sin_match = re.search(r"sin\s*\(\s*([^)]+)\)", kalan_str, re.IGNORECASE)
+            if sin_match:
+                dalga_tipi = "SIN"
+                params = [deger_oku(p) for p in sin_match.group(1).replace(",", " ").split()]
+                if len(params) == 2:
+                    dalga_param = (0.0, params[0], params[1])  # offset=0, genlik, f
+                elif len(params) >= 3:
+                    dalga_param = (params[0], params[1], params[2])  # offset, genlik, f
+                deger = dalga_param[0]
+                ac_genlik = dalga_param[1]
+            else:
+                kalan = parcalar[3:]
+                idx = 0
+                while idx < len(kalan):
+                    token = kalan[idx].upper()
+                    if token == "DC":
+                        idx += 1
+                        if idx < len(kalan):
+                            deger = deger_oku(kalan[idx])
+                            idx += 1
+                    elif token == "AC":
+                        idx += 1
+                        if idx < len(kalan):
+                            ac_genlik = deger_oku(kalan[idx])
+                            idx += 1
+                        if idx < len(kalan) and kalan[idx].upper() not in ("DC", "AC"):
+                            ac_faz = float(kalan[idx])
+                            idx += 1
+                    else:
                         deger = deger_oku(kalan[idx])
                         idx += 1
-                elif token == "AC":
-                    idx += 1
-                    if idx < len(kalan):
-                        ac_genlik = deger_oku(kalan[idx])
-                        idx += 1
-                    if idx < len(kalan) and kalan[idx].upper() not in ("DC", "AC"):
-                        ac_faz = float(kalan[idx])
-                        idx += 1
-                else:
-                    deger = deger_oku(kalan[idx])
-                    idx += 1
 
         e = Eleman(
             isim=isim,
@@ -208,6 +236,8 @@ def netlist_oku(metin: str) -> Netlist:
             kontrol_p=kontrol_p,
             kontrol_n=kontrol_n,
             kontrol_kaynak=kontrol_kaynak,
+            dalga_tipi=dalga_tipi,
+            dalga_param=dalga_param,
         )
         elemanlar.append(e)
 
@@ -216,4 +246,4 @@ def netlist_oku(metin: str) -> Netlist:
     if not any("0" in (e.dugum_p, e.dugum_n) for e in elemanlar):
         raise ValueError("Devrede toprak düğümü (0 veya gnd) yok")
 
-    return Netlist(elemanlar, frekans=devre_frekans)
+    return Netlist(elemanlar, frekans=devre_frekans, tran=tran_bilgisi)

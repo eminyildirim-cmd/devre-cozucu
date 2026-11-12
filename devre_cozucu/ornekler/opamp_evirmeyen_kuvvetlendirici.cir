@@ -8,3 +8,4 @@ Vin 1 0 1
 Eopamp 3 0 1 2 100k
 Rf 3 2 9k
 R1 2 0 1k
+

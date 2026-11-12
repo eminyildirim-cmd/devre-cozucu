@@ -1,0 +1,9 @@
+* RC Devresi Basamak Yanıtı (Step Response)
+* R = 1k, C = 1u -> Zaman sabiti: tau = R * C = 1 ms
+* t = tau (1 ms) anında V(2) ≈ 6.32 V (%63.2)
+* t = 5 ms anında V(2) ≈ 9.93 V (kararlı durum)
+.tran 10u 5m
+
+Vin 1 0 10
+R1  1 2 1k
+C1  2 0 1u

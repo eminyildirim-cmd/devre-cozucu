@@ -35,10 +35,15 @@ Devre Analizi dersi ve Circuits & Systems uzmanlaşması kapsamında:
   * CCVS (`H`): Akım kontrollü gerilim kaynağı ($V = r \cdot I_{sens}$).
   * CCCS (`F`): Akım kontrollü akım kaynağı ($I = \beta \cdot I_{sens}$).
   * Op-Amp (İşlemsel Kuvvetlendirici) evirmeyen yükselteç devresi örneği eklendi ($A_v = 10$).
-  * Toplam birim test sayısı: **23/23 Başarılı**.
-* [ ] **2.3 Geçici (Transient) Analiz (Sıradaki Adım):**
-  * Zaman domeninde sayısal çözümleme ($t = 0 \to t_{dur}$) ve dalga şekli grafikleri (`matplotlib`).
-* [ ] **2.4 Laplace / SymPy:**
+* [x] **2.3 Geçici (Transient) Analiz (Tamamlandı):**
+  * Sayısal integrasyon ile eşdeğer devre modeli (Yamuk Kuralı - Trapezoidal Companion Model).
+  * Sabit zaman adımı ile tek seferlik matris kurulumu ve hızlı çözümleme.
+  * Sinüs dalgası (`SIN(offset genlik frekans)`) ve basamak tepkisi desteği.
+  * Konsolda doğrudan **ASCII dalga şekli çizimi**.
+  * Harici kütüphane bağımlılığı olmadan **vektörel SVG grafik kaydetme**.
+  * RC şarj/deşarj ve RLC sönümlü salınım örnekleri eklendi.
+  * Toplam birim test sayısı: **26/26 Başarılı**.
+* [ ] **2.4 Laplace / SymPy (Sıradaki Adım):**
   * Sembolik transfer fonksiyonu $H(s)$ ve kutup-sıfır analizi.
 
 ---

@@ -1,11 +1,13 @@
 """Testler:  python3 -m unittest -v"""
 import math
+import os
 import unittest
 
 import numpy as np
 
 from mna import DevreHatasi, coz, coz_ac, polar
 from netlist import deger_oku, netlist_oku
+from transient import ascii_ciz, coz_tran, svg_kaydet
 
 
 def cozumle_dc(metin):
@@ -14,6 +16,10 @@ def cozumle_dc(metin):
 
 def cozumle_ac(metin, frekans=None):
     return coz_ac(netlist_oku(metin), frekans=frekans)
+
+
+def cozumle_tran(metin, tstep, tstop):
+    return coz_tran(netlist_oku(metin), tstep, tstop)
 
 
 class DegerOkuma(unittest.TestCase):
@@ -69,8 +75,6 @@ class DCCozum(unittest.TestCase):
 
 class BagimliKaynaklar(unittest.TestCase):
     def test_vcvs_e_kaynagi(self):
-        # E1: Gerilim kontrollü gerilim kaynağı (kazanç = 3)
-        # V1 = 2V, E1 out: 2 -> 0, in: 1 -> 0
         netlist = "V1 1 0 2\nE1 2 0 1 0 3\nR1 2 0 1k"
         c = cozumle_dc(netlist)
         self.assertAlmostEqual(c.dugum_voltajlari["1"], 2.0)
@@ -79,27 +83,18 @@ class BagimliKaynaklar(unittest.TestCase):
         self.assertAlmostEqual(sum(c.eleman_gucleri.values()), 0, places=12)
 
     def test_vccs_g_kaynagi(self):
-        # G1: Gerilim kontrollü akım kaynağı (gm = 4 mS)
-        # V1 = 2.5V, G1 out: 0 -> 2, in: 1 -> 0 => I = 4m * 2.5 = 10 mA
         netlist = "V1 1 0 2.5\nG1 0 2 1 0 4m\nR1 2 0 500"
         c = cozumle_dc(netlist)
-        self.assertAlmostEqual(c.dugum_voltajlari["2"], 5.0)  # 10 mA * 500 ohm = 5V
+        self.assertAlmostEqual(c.dugum_voltajlari["2"], 5.0)
         self.assertAlmostEqual(sum(c.eleman_gucleri.values()), 0, places=12)
 
     def test_ccvs_h_kaynagi(self):
-        # H1: Akım kontrollü gerilim kaynağı (r = 500)
-        # V1 = 10V, R1 = 1k -> I(V1) = -10 mA (SPICE: kaynaktan çıkan)
-        # H1 out: 2 -> 0, ctrl: V1, r = 500 -> V(2) = 500 * (-0.010) = -5V
         netlist = "V1 1 0 10\nR1 1 0 1k\nH1 2 0 V1 500\nR2 2 0 1k"
         c = cozumle_dc(netlist)
         self.assertAlmostEqual(c.dugum_voltajlari["2"], -5.0)
         self.assertAlmostEqual(sum(c.eleman_gucleri.values()), 0, places=12)
 
     def test_cccs_f_kaynagi(self):
-        # F1: Akım kontrollü akım kaynağı (beta = 2)
-        # V1 = 5V, R1 = 1k -> I(V1) = -5 mA
-        # F1 out: 0 -> 2, ctrl: V1, beta = 2 -> I = 2 * (-5 mA) = -10 mA
-        # R2 = 100 ohm -> V(2) = -10 mA * 100 = -1.0V
         netlist = "V1 1 0 5\nR1 1 0 1k\nF1 0 2 V1 2\nR2 2 0 100"
         c = cozumle_dc(netlist)
         self.assertAlmostEqual(c.dugum_voltajlari["2"], -1.0)
@@ -157,6 +152,48 @@ class ACCozumTest(unittest.TestCase):
         genlik_i, faz_i = polar(c.eleman_akimlari["R1"])
         self.assertAlmostEqual(genlik_i, 5.0)
         self.assertAlmostEqual(faz_i, 60.0)
+
+
+class GeciciAnalizTest(unittest.TestCase):
+    def test_rc_basamak_yaniti(self):
+        # R = 1k, C = 1u -> tau = 1 ms
+        # 10 V basamak uygulandığında:
+        # t = tau (1 ms) anında V_C = 10 * (1 - e^-1) ≈ 6.3212 V
+        # t = 5 tau (5 ms) anında V_C ≈ 9.9326 V
+        netlist = "Vin 1 0 10\nR1 1 2 1k\nC1 2 0 1u"
+        c = cozumle_tran(netlist, tstep=2e-6, tstop=5e-3)
+
+        idx_1ms = int(round(1e-3 / 2e-6))
+        v_1ms = c.dugum_voltajlari["2"][idx_1ms]
+        beklenen_1ms = 10.0 * (1.0 - math.exp(-1.0))
+        self.assertAlmostEqual(v_1ms, beklenen_1ms, delta=0.01)
+
+        v_5ms = c.dugum_voltajlari["2"][-1]
+        beklenen_5ms = 10.0 * (1.0 - math.exp(-5.0))
+        self.assertAlmostEqual(v_5ms, beklenen_5ms, delta=0.01)
+
+    def test_rl_basamak_yaniti(self):
+        # R = 100, L = 100mH -> tau = L / R = 1 ms
+        # 10 V basamak uygulandığında:
+        # t = 1 ms anında i_L = (10 / 100) * (1 - e^-1) = 0.1 * 0.63212 ≈ 63.21 mA
+        netlist = "Vin 1 0 10\nR1 1 2 100\nL1 2 0 100m"
+        c = cozumle_tran(netlist, tstep=2e-6, tstop=5e-3)
+
+        idx_1ms = int(round(1e-3 / 2e-6))
+        i_1ms = c.eleman_akimlari["L1"][idx_1ms]
+        self.assertAlmostEqual(i_1ms, 0.1 * (1.0 - math.exp(-1.0)), delta=0.001)
+
+    def test_ascii_ve_svg_cizim(self):
+        netlist = "Vin 1 0 10\nR1 1 2 1k\nC1 2 0 1u"
+        c = cozumle_tran(netlist, tstep=50e-6, tstop=2e-3)
+        cizim = ascii_ciz(c.zaman, c.dugum_voltajlari["2"], etiket="V(2)")
+        self.assertIn("V(2)", cizim)
+        self.assertIn("●", cizim)
+
+        test_svg = "/tmp/test_grafik.svg"
+        svg_kaydet(c.zaman, {"V(2)": c.dugum_voltajlari["2"]}, test_svg)
+        self.assertTrue(os.path.exists(test_svg))
+        os.remove(test_svg)
 
 
 class Hatalar(unittest.TestCase):
